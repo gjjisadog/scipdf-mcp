@@ -1,25 +1,87 @@
+export type FilenameStyle = "doi" | "author_year_title";
+
+export type ErrorCode =
+  | "EMPTY_QUERY"
+  | "INVALID_DOI"
+  | "DOI_NOT_FOUND"
+  | "AMBIGUOUS_DOI"
+  | "URL_NO_DOI"
+  | "PDF_NOT_IN_DB"
+  | "MIRROR_BLOCKED"
+  | "ALL_SOURCES_FAILED"
+  | "INVALID_PDF"
+  | "IO_ERROR"
+  | "UNKNOWN";
+
 export interface SciPdfConfig {
   downloadDir: string;
   scihubMirrors: string[];
-  /** Direct PDF base URLs tried when HTML mirrors fail, e.g. https://sci.bban.top/pdf/ */
+  /** Direct PDF base URLs, e.g. https://sci.bban.top/pdf/ */
   pdfHosts: string[];
   timeoutMs: number;
+  /** Short timeout for known-bad / blocked responses */
+  fastFailTimeoutMs: number;
   concurrency: number;
   userAgent: string;
+  filenameStyle: FilenameStyle;
+  /** Mirror health cache TTL (ms) */
+  healthCacheTtlMs: number;
+  /** Global rate limit: min gap between outbound requests (ms) */
+  minRequestGapMs: number;
+  debug: boolean;
 }
 
-export type QueryType = "auto" | "doi" | "url" | "title";
+export type QueryType = "auto" | "doi" | "url" | "title" | "citation";
 
 export interface DownloadResult {
+  ok: boolean;
+  index?: number;
+  query: string;
+  doi?: string;
+  title?: string;
+  authors?: string[];
+  year?: number;
+  path?: string;
+  source?: "scihub" | "cache";
+  mirror?: string;
+  bytes?: number;
+  cached?: boolean;
+  code?: ErrorCode;
+  error?: string;
+  candidates?: Array<{ doi: string; title?: string; score?: number }>;
+  citation?: {
+    apa?: string;
+    gbt?: string;
+    bibtex?: string;
+  };
+}
+
+export interface BatchDownloadResult {
+  results: DownloadResult[];
+  succeeded: number;
+  failed: number;
+  total: number;
+  deduped: number;
+  manifestPath?: string;
+}
+
+export interface ResolveResult {
   ok: boolean;
   query: string;
   doi?: string;
   title?: string;
-  path?: string;
-  source?: "scihub";
-  mirror?: string;
-  bytes?: number;
+  authors?: string[];
+  year?: number;
+  container?: string;
+  source?: "doi" | "crossref" | "openalex" | "url";
+  code?: ErrorCode;
   error?: string;
+  candidates?: Array<{
+    doi: string;
+    title?: string;
+    score?: number;
+    source?: string;
+  }>;
 }
 
 export interface MirrorStatus {
@@ -27,6 +89,7 @@ export interface MirrorStatus {
   ok: boolean;
   latencyMs?: number;
   error?: string;
+  cached?: boolean;
 }
 
 export interface CrossrefWork {

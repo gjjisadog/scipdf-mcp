@@ -1,7 +1,7 @@
 {
   "name": "scipdf-mcp",
-  "version": "0.1.0",
-  "description": "MCP server + skill: resolve DOI and download academic paper PDFs locally",
+  "version": "0.2.0",
+  "description": "MCP server + skill + CLI: resolve DOI and download academic paper PDFs locally",
   "type": "module",
   "bin": {
     "scipdf-mcp": "./dist/index.js"
@@ -12,7 +12,8 @@
     "dev": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "install:all": "node scripts/install.mjs"
+    "install:all": "node scripts/install.mjs",
+    "cli": "node dist/index.js"
   },
   "engines": {
     "node": ">=20"

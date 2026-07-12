@@ -1,160 +1,104 @@
 # scipdf-mcp
 
-一键安装的 **学术论文 PDF 下载** 工具：MCP Server + Agent Skill。
-
-把仓库地址甩给 AI，它执行安装命令后即可：
+一键安装的 **学术论文 PDF 下载** 工具：**MCP Server + Skill + CLI**（v0.2）。
 
 ```text
-用户要论文 → Agent 解析 DOI → MCP 下载 → 返回本地 path
+用户要论文 → 解析 DOI（Crossref/OpenAlex）→ 下载 → 返回本地 path + 引用
 ```
 
 > 合规提示：请自行确认当地法规与机构政策。本工具仅供个人科研学习自用。
 
+**仓库：** https://github.com/gjjisadog/scipdf-mcp
+
 ---
 
-## 给别人 / 给 AI 的一键安装
-
-把下面整段发给任意 AI Agent（Grok / Claude / Cursor 等）：
+## 给 AI / 一键安装
 
 ```text
-请按仓库 AGENTS.md 为我安装 scipdf-mcp：
+请按仓库 AGENTS.md 安装 scipdf-mcp：
 
 git clone https://github.com/gjjisadog/scipdf-mcp.git
-cd scipdf-mcp
-bash install.sh
+cd scipdf-mcp && bash install.sh
 
-装完后重启客户端，用 /scipdf 或「下载论文 + 标题/DOI」测试。
+重启客户端后用 /scipdf 测试。更新：bash install.sh --update
 ```
-
-### 人类手动安装
 
 ```bash
 git clone https://github.com/gjjisadog/scipdf-mcp.git
 cd scipdf-mcp
 bash install.sh
+# 更新
+bash install.sh --update
 ```
 
-可选指定下载目录：
-
-```bash
-SCIPDF_DOWNLOAD_DIR=~/Documents/Papers bash install.sh
-```
-
-要求：**Node.js ≥ 20**。
-
-安装脚本会自动：
-
-| 步骤 | 内容 |
-|------|------|
-| 依赖 + 构建 | `npm install` + `npm run build` |
-| Skill | 写入 `~/.grok/skills/scipdf`（以及 Claude / agents 目录） |
-| MCP | 注册到 Grok / Claude Desktop / Cursor |
-| 目录 | 创建 `~/Documents/Papers`（或自定义） |
-
-然后 **重启** 对应 AI 客户端。
+要求：**Node.js ≥ 20**。安装后会注册 MCP + Skill，并做 CLI 自检。
 
 ---
 
 ## 使用
 
-```text
-/scipdf 帮我下载：Nanometre-scale thermometry in a living cell
+**Agent：** `/scipdf 下载：Nanometre-scale thermometry in a living cell`
+
+**CLI：**
+
+```bash
+node dist/index.js download 10.1038/nature12373
+node dist/index.js download --title "Nanometre-scale thermometry in a living cell"
+node dist/index.js batch 10.a/b 10.c/d
+node dist/index.js resolve "some title"
+node dist/index.js parse refs.bib
+node dist/index.js list
+node dist/index.js check-mirrors
 ```
 
-或：
-
-```text
-下载 DOI 10.1038/nature12373
-```
-
-成功示例：
-
-| 字段 | 内容 |
-|------|------|
-| DOI | `10.1038/nature12373` |
-| 路径 | `/Users/你/Documents/Papers/10.1038_nature12373.pdf` |
+无参数启动 = MCP stdio 服务。
 
 ---
 
-## MCP Tools
+## MCP Tools / Resources / Prompts
 
 | Tool | 说明 |
 |------|------|
-| `download_paper` | 单篇（DOI / URL / 标题） |
-| `download_papers` | 批量 |
-| `resolve_doi` | 只解析 DOI |
-| `list_mirrors` / `check_mirrors` | 镜像与配置 |
+| `download_paper` | 单篇；返回 path、`cached`、`citation`、错误 `code` |
+| `download_papers` | 批量去重 + `scipdf-manifest.json` |
+| `resolve_doi` | Crossref + OpenAlex |
+| `parse_references` | bib/ris/粘贴列表抽 DOI |
+| `list_mirrors` / `check_mirrors` | 配置与健康缓存探测 |
+| `list_papers` | 已下载列表 |
+| `open_paper` | 系统默认打开 PDF |
+| `format_citation` | APA / GB/T / BibTeX |
+| `reload_config` | 热加载配置 |
+
+- Resource: `papers://list`
+- Prompt: `download_papers_batch`
+
+错误码：`DOI_NOT_FOUND` / `AMBIGUOUS_DOI` / `MIRROR_BLOCKED` / `ALL_SOURCES_FAILED` / `PDF_NOT_IN_DB` 等。
 
 ---
 
-## 手动配置（安装脚本失败时）
-
-### Grok `~/.grok/config.toml`
-
-```toml
-[mcp_servers.scipdf]
-command = "node"
-args = ["/绝对路径/scipdf-mcp/dist/index.js"]
-enabled = true
-env = { SCIPDF_DOWNLOAD_DIR = "/Users/你/Documents/Papers" }
-```
-
-### Claude / Cursor JSON
-
-```json
-{
-  "mcpServers": {
-    "scipdf": {
-      "command": "node",
-      "args": ["/绝对路径/scipdf-mcp/dist/index.js"],
-      "env": {
-        "SCIPDF_DOWNLOAD_DIR": "/Users/你/Documents/Papers"
-      }
-    }
-  }
-}
-```
-
-Skill 文件：复制 `skills/scipdf/SKILL.md` → `~/.grok/skills/scipdf/SKILL.md`
-
----
-
-## 环境变量
+## 环境变量（节选）
 
 | 变量 | 含义 | 默认 |
 |------|------|------|
-| `SCIPDF_DOWNLOAD_DIR` | PDF 保存目录 | `~/Documents/Papers` |
-| `SCIPDF_MIRRORS` | Sci-Hub 镜像（逗号分隔） | 内置列表 |
-| `SCIPDF_PDF_HOSTS` | 直连 PDF 主机 | `https://sci.bban.top/pdf/` |
-| `SCIPDF_TIMEOUT_MS` | 超时 | `30000` |
-| `SCIPDF_CONCURRENCY` | 批量并发 | `2` |
+| `SCIPDF_DOWNLOAD_DIR` | 保存目录 | `~/Documents/Papers` |
+| `SCIPDF_FILENAME_STYLE` | `doi` 或 `author_year_title` | `doi` |
+| `SCIPDF_PDF_HOSTS` | 直连 PDF 主机 | `sci.bban.top/pdf/` |
+| `SCIPDF_MIRRORS` | HTML 镜像列表 | 内置 |
+| `SCIPDF_DEBUG=1` | 调试日志 | off |
+| `SCIPDF_HEALTH_TTL_MS` | 镜像健康缓存 | 15min |
 
-也可复制 `config.example.json` → `config.json`。
+见 `config.example.json`。
 
 ---
 
 ## 开发
 
 ```bash
-npm install
-npm run build
-npm test
-npm run dev          # 开发模式跑 MCP
-npm run install:all  # 同 install.sh
+npm install && npm run build && npm test
+npm run install:all
 ```
 
----
-
-## 工作原理（简）
-
-```
-query → DOI（Crossref 支持标题）
-     → 直连 PDF host / Sci-Hub 镜像
-     → 校验 %PDF- → 写入本地
-```
-
-Skill 说明见 [`skills/scipdf/SKILL.md`](skills/scipdf/SKILL.md)  
-给 Agent 的安装说明见 [`AGENTS.md`](AGENTS.md)
+CI：GitHub Actions 上 Node 20/22 build + test。
 
 ## License
 

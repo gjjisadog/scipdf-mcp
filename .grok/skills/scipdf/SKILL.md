@@ -1,151 +1,111 @@
 ---
 name: scipdf
 description: >
-  Download academic paper PDFs to a local folder via the scipdf MCP server.
-  Workflow: resolve DOI → call MCP download tools → return saved file paths.
-  Use when the user wants papers, PDFs, full text, "下载论文", "找论文",
-  "download paper", DOI batch download, or runs /scipdf.
+  Download academic paper PDFs via scipdf MCP (or CLI). Workflow: resolve DOI
+  (Crossref/OpenAlex) → download_paper(s) → return local paths + citations.
+  Triggers: /scipdf, 下载论文, 找论文, 全文, PDF, download paper, bibliography,
+  文献, DOI batch, bib/ris import.
 metadata:
-  short-description: "Resolve DOI → scipdf MCP → local PDF path"
+  short-description: "DOI → scipdf MCP → local PDF path + citation"
 ---
 
 # scipdf — 论文 PDF 本地下载工作流
 
-配套 MCP：`scipdf`（`download_paper` / `download_papers` / `resolve_doi` 等）。
+配套：**MCP `scipdf`** + 可选 CLI `node …/scipdf-mcp/dist/index.js`。
 
-目标：用户说出要找的论文 → 得到 **DOI** → 调用 MCP → 把 **本地保存路径** 交还给用户。
+目标：用户要论文 → **DOI** → 本地下载 → 返回 **path**（+ 可选引用格式）。
 
-## 前置条件
+## 前置条件 / 诊断
 
-1. MCP server `scipdf` 已在客户端配置并可用。
-2. 若工具列表里没有 `download_paper`，先告知用户检查 MCP 配置，不要假装已下载。
+1. 工具列表应有 `download_paper`（MCP 名 `scipdf`）。
+2. **若没有 MCP 工具：**
+   - 提示用户：重启客户端；或运行  
+     `cd <repo> && bash install.sh` / `bash install.sh --update`
+   - 不要假装已下载。
+   - 若用户本机有仓库，可退路执行 CLI：  
+     `node /path/to/scipdf-mcp/dist/index.js download "<query>"`
 
-## 完整工作流（必须按序）
+## 完整工作流
 
 ```
-用户：我需要这些论文（标题 / 链接 / DOI / 文献列表）
-        │
-        ▼
- ① 收集与规范化查询
-        │
-        ▼
- ② 解析 DOI（能直接用就不搜）
-        │
-        ▼
- ③ 调用 scipdf MCP 下载
-        │
-        ▼
- ④ 向用户汇报：标题、DOI、本地 path、是否成功
+用户：标题 / DOI / 链接 / 文献列表 / bib
+  → ① 收集查询
+  → ② resolve_doi（必要时）
+  → ③ download_paper / download_papers
+  → ④ 汇报 path + DOI + 引用；失败报 code
 ```
 
-### ① 收集查询
+### ① 收集
 
-从用户消息中提取每一篇的标识，优先级：
-
-1. **DOI**（`10.xxxx/...` 或 `https://doi.org/...`）— 直接用  
-2. **出版社 / doi.org URL** — 交给 MCP（可抽 DOI）或先 `resolve_doi`  
-3. **论文标题**（可带作者、年份）— 用于解析 DOI  
-4. 模糊描述 — 先澄清或检索公开元数据，**确认标题/DOI 后再下载**
-
-多篇时列成清单，逐项处理；批量时用 `download_papers`。
+优先级：DOI → URL → 标题 → 引用串 → bib/ris 整段（用 `parse_references`）。
 
 ### ② 解析 DOI
 
-| 用户已有 | Agent 动作 |
-|----------|------------|
-| 明确 DOI | 规范化后进入 ③（去掉 `https://doi.org/` 前缀即可） |
-| 只有标题 / 不完整引用 | 调用 MCP `resolve_doi`，或用公开学术元数据（Crossref 等）确认 DOI |
-| 只有链接 | 优先从链接抽 DOI；抽不到则 `resolve_doi` |
-| DOI 不确定 | 把候选 DOI + 标题给用户确认，或取置信度最高的一条并在回复中注明 |
+| 输入 | 动作 |
+|------|------|
+| DOI | 直接 `download_paper` |
+| 标题 | `resolve_doi` 或直接 `download_paper`（内部会解析） |
+| 失败 `DOI_NOT_FOUND` | 看 `candidates`；或 web 检索后用明确 DOI 再下 |
+| `AMBIGUOUS_DOI` | **列出 candidates 让用户选**，不要静默下错篇 |
 
-**不要**在没有合理 DOI/标题的情况下盲目下载。
-
-### ③ 调用 MCP 下载
-
-**单篇：**
+### ③ 下载
 
 ```text
-tool: download_paper
-args:
-  query: "<DOI 或标题或 URL>"
-  query_type: "doi" | "title" | "url" | "auto"   # 能确定类型就显式传
-  force: false   # 仅当用户要求重新下载时为 true
+download_paper:
+  query: "..."
+  query_type: auto|doi|title|url|citation
+  force: false
 ```
 
-**多篇：**
+批量：
 
 ```text
-tool: download_papers
-args:
-  queries: ["10.xxx/a", "10.xxx/b", "..."]
-  query_type: "auto"
+download_papers:
+  queries: ["10.a/b", "title...", "@article{...}"]
 ```
 
-可选：
+- 已存在文件会返回 `cached: true` + path（不必当错误）。
+- 镜像异常：`check_mirrors`（可 `force_refresh: true`）。
 
-- 镜像异常时先 `check_mirrors` / `list_mirrors`
-- 用户指定目录时传 `outdir`
+### ④ 汇报（必填字段）
 
-### ④ 向用户汇报
+成功：
 
-对每一篇清楚给出：
+- 标题、DOI、**path**、bytes、`cached`、可选 `citation.apa` / `gbt` / `bibtex`
 
-| 字段 | 来源 |
-|------|------|
-| 标题 | MCP 返回的 `title`（若有） |
-| DOI | `doi` |
-| 本地路径 | `path`（**这是用户最需要的结果**） |
-| 大小 | `bytes`（若有） |
-| 状态 | `ok: true/false`；失败写 `error` |
+失败：
 
-成功示例表述：
+- `code`（如 `DOI_NOT_FOUND` / `MIRROR_BLOCKED` / `ALL_SOURCES_FAILED` / `PDF_NOT_IN_DB`）
+- `error` 原文
+- `candidates`（若有）
 
-> 已保存：  
-> - *Nanometre-scale thermometry in a living cell*  
-> - DOI: `10.1038/nature12373`  
-> - 路径: `/Users/.../Papers/10.1038_nature12373.pdf`
+**禁止编造 path。**
 
-失败时：
+## 失败重试（固定策略）
 
-- 如实说明 MCP 的 `error`
-- 可建议：核对 DOI、`check_mirrors`、换网络/镜像配置
-- **不要编造**路径或假装文件已存在
+1. 标题 → `download_paper` 失败且 `DOI_NOT_FOUND`  
+2. 用 `resolve_doi` 或 candidates / 公开网页确认 DOI  
+3. `download_paper` + `query_type: "doi"`  
+4. 仍失败 → `check_mirrors`，把 code 给用户，不无限重试
 
-## 行为准则
+## 引用与打开
 
-1. **工作流中心是 DOI + 本地 path**，不是长篇讲解下载原理。  
-2. 优先调用 MCP，不要自己用浏览器/ curl 重造下载逻辑（除非 MCP 不可用且用户要求排查）。  
-3. 批量任务：先解析齐 DOI 清单，再 `download_papers`，最后用表格汇总成功/失败。  
-4. 已存在文件：MCP 可能返回已有 `path`；告知用户已存在，除非其要求 `force: true`。  
-5. 合法与合规由用户自负；本 skill 只规范工具调用与结果汇报，不做来源伪装，也不引导规避安全策略。
+- 下载结果已含 citation 时直接展示 APA 或 GB/T。
+- 需要时可 `format_citation` / `open_paper`。
 
-## 示例对话
+## 批量 / 文献库
 
-**用户：** `/scipdf` 帮我找 Nature 上这篇：Nanometre-scale thermometry in a living cell  
-
-**Agent：**
-
-1. `resolve_doi` 或 `download_paper` with title/DOI  
-2. 得到 path  
-3. 回复路径与 DOI  
-
-**用户：** 批量下载这些 DOI：`10.a/b`, `10.c/d`  
-
-**Agent：** `download_papers` → 表格列出每篇 path 或 error。
-
-## MCP 工具速查
-
-| Tool | 用途 |
-|------|------|
-| `download_paper` | 单篇下载 |
-| `download_papers` | 批量下载 |
-| `resolve_doi` | 只解析 DOI，不下载 |
-| `list_mirrors` | 查看配置与镜像 |
-| `check_mirrors` | 探测镜像是否可用 |
+- `parse_references` 抽 DOI  
+- `download_papers` 自动去重并写 `scipdf-manifest.json`  
+- `list_papers` 查看已下载
 
 ## 完成标准
 
-- [ ] 每篇目标论文都有明确 DOI（或已说明无法解析）  
-- [ ] 已调用 scipdf MCP（而非口头声称）  
-- [ ] 成功项给出可打开的本地 `path`  
-- [ ] 失败项给出真实错误，无虚构文件  
+- [ ] 每篇有 DOI 或明确无法解析  
+- [ ] 成功项有真实 path  
+- [ ] 失败项有 code，无虚构文件  
+- [ ] 歧义时已请用户确认  
+
+## 合规
+
+合规由用户自负。本 skill 只规范工具调用与结果汇报。

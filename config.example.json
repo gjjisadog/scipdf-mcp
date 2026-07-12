@@ -13,6 +13,11 @@
     "https://sci.bban.top/pdf/"
   ],
   "timeoutMs": 30000,
+  "fastFailTimeoutMs": 8000,
   "concurrency": 2,
+  "filenameStyle": "doi",
+  "healthCacheTtlMs": 900000,
+  "minRequestGapMs": 200,
+  "debug": false,
   "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 }

@@ -241,22 +241,61 @@ function ensureDownloadDir() {
   ok(`Download directory: ${DOWNLOAD_DIR}`);
 }
 
+function selfTest(entry) {
+  if (process.env.SCIPDF_SELFTEST === "0") {
+    warn("Skipping self-test (SCIPDF_SELFTEST=0)");
+    return;
+  }
+  log("Running self-test…");
+  const r = spawnSync("node", [entry, "version"], {
+    encoding: "utf8",
+    cwd: ROOT,
+  });
+  if (r.status !== 0) {
+    fail(`Self-test failed: node dist/index.js version\n${r.stderr || r.stdout}`);
+  }
+  ok(`CLI version: ${(r.stdout || "").trim()}`);
+
+  // resolve a known DOI (network) — soft fail
+  const r2 = spawnSync(
+    "node",
+    [entry, "resolve", "10.1038/nature12373"],
+    { encoding: "utf8", cwd: ROOT, timeout: 25000 },
+  );
+  if (r2.status === 0 && /"ok":\s*true/.test(r2.stdout || "")) {
+    ok("resolve DOI self-test passed");
+  } else {
+    warn("resolve DOI self-test skipped/failed (network?) — install still OK");
+  }
+}
+
 function printSummary(entry) {
+  let ver = "?";
+  try {
+    ver = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
+  } catch {
+    /* ignore */
+  }
   console.log(`
-\x1b[1mscipdf-mcp installed\x1b[0m
+\x1b[1mscipdf-mcp v${ver} installed\x1b[0m
 
   Entry:     ${entry}
   Papers:    ${DOWNLOAD_DIR}
   Skill:     ~/.grok/skills/scipdf  (also ~/.claude / ~/.agents)
   MCP name:  scipdf
+  CLI:       node ${entry} download <doi|title>
 
 \x1b[1mNext steps\x1b[0m
   1. Restart Grok / Claude / Cursor so MCP reloads
   2. In chat:  /scipdf  download paper: <title or DOI>
-  3. Or ask:   "用 scipdf 下载 DOI 10.xxxx/yyyy"
+  3. CLI:      node dist/index.js download 10.xxxx/yyyy
 
-\x1b[1mFor AI agents (one-liner reinstall)\x1b[0m
-  git clone <repo> && cd scipdf-mcp && npm run install:all
+\x1b[1mUpdate later\x1b[0m
+  cd ${ROOT} && bash install.sh --update
+
+\x1b[1mFor AI agents\x1b[0m
+  git clone https://github.com/gjjisadog/scipdf-mcp.git
+  cd scipdf-mcp && bash install.sh
 `);
 }
 
@@ -269,6 +308,7 @@ function main() {
   tryGrokCli(entry);
   registerGrokToml(entry);
   registerClaudeAndCursor(entry);
+  selfTest(entry);
   printSummary(entry);
 }
 
