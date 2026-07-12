@@ -1,0 +1,18 @@
+{
+  "downloadDir": "~/Documents/Papers",
+  "scihubMirrors": [
+    "https://sci-hub.ren/",
+    "https://sci-hub.red/",
+    "https://sci-hub.ee/",
+    "https://sci-hub.st/",
+    "https://sci-hub.ru/",
+    "https://sci-hub.box/",
+    "https://sci-hub.se/"
+  ],
+  "pdfHosts": [
+    "https://sci.bban.top/pdf/"
+  ],
+  "timeoutMs": 30000,
+  "concurrency": 2,
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+}

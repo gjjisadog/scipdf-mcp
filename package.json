@@ -1,0 +1,62 @@
+{
+  "name": "scipdf-mcp",
+  "version": "0.1.0",
+  "description": "MCP server + skill: resolve DOI and download academic paper PDFs locally",
+  "type": "module",
+  "bin": {
+    "scipdf-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "install:all": "node scripts/install.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "src",
+    "skills",
+    "scripts",
+    "install.sh",
+    "config.example.json",
+    "AGENTS.md",
+    "README.md",
+    "LICENSE",
+    "tsconfig.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjjisadog/scipdf-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gjjisadog/scipdf-mcp/issues"
+  },
+  "homepage": "https://github.com/gjjisadog/scipdf-mcp#readme",
+  "keywords": [
+    "mcp",
+    "sci-hub",
+    "pdf",
+    "doi",
+    "academic",
+    "grok",
+    "claude",
+    "skill"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "cheerio": "^1.0.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.9"
+  }
+}
