@@ -20,6 +20,7 @@ import {
 } from "./citations.js";
 import { buildCitations } from "./citeFormat.js";
 import { fetchPdfViaSciHub } from "./scihub.js";
+import { fetchPdfViaUnpaywall, hasUnpaywallEmail } from "./unpaywall.js";
 import { SciPdfError, codeFromError } from "./errors.js";
 import {
   buildPdfPath,
@@ -236,6 +237,50 @@ export async function downloadPaper(
         source: "cache",
         cached: true,
         citation,
+      };
+    }
+
+    // 1) Legal OA via Unpaywall (needs user-configured email)
+    if (config.preferOa && hasUnpaywallEmail(config)) {
+      const oa = await fetchPdfViaUnpaywall(doi, config);
+      if (oa) {
+        const bytes = await savePdf(path, oa.pdfBytes);
+        return {
+          ok: true,
+          query,
+          doi,
+          title: title ?? oa.meta.title,
+          authors,
+          year,
+          path,
+          source: "unpaywall",
+          mirror: oa.pdfUrl,
+          bytes,
+          cached: false,
+          citation,
+          candidates: resolved.candidates,
+          oa: {
+            hostType: oa.meta.hostType,
+            version: oa.meta.version,
+            license: oa.meta.license,
+            pdfUrl: oa.pdfUrl,
+          },
+        };
+      }
+    }
+
+    // 2) Sci-Hub / direct PDF hosts (optional)
+    if (!config.allowScihub) {
+      return {
+        ok: false,
+        query,
+        doi,
+        title,
+        code: "PDF_NOT_IN_DB",
+        error: hasUnpaywallEmail(config)
+          ? "No Open Access PDF from Unpaywall, and Sci-Hub fallback is disabled (SCIPDF_ALLOW_SCIHUB=false)."
+          : "Unpaywall email not set and Sci-Hub fallback is disabled. Set SCIPDF_UNPAYWALL_EMAIL and/or enable SCIPDF_ALLOW_SCIHUB.",
+        candidates: resolved.candidates,
       };
     }
 

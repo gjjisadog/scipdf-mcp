@@ -29,6 +29,7 @@ const HOME = homedir();
 
 const DOWNLOAD_DIR =
   process.env.SCIPDF_DOWNLOAD_DIR || join(HOME, "Documents", "Papers");
+const UNPAYWALL_EMAIL = (process.env.SCIPDF_UNPAYWALL_EMAIL || "").trim();
 
 function log(msg) {
   console.log(`\x1b[36m[scipdf]\x1b[0m ${msg}`);
@@ -108,12 +109,16 @@ function installSkill() {
 }
 
 function mcpServerBlock(entry) {
+  const env = {
+    SCIPDF_DOWNLOAD_DIR: DOWNLOAD_DIR,
+  };
+  if (UNPAYWALL_EMAIL) {
+    env.SCIPDF_UNPAYWALL_EMAIL = UNPAYWALL_EMAIL;
+  }
   return {
     command: "node",
     args: [entry],
-    env: {
-      SCIPDF_DOWNLOAD_DIR: DOWNLOAD_DIR,
-    },
+    env,
   };
 }
 
@@ -187,6 +192,10 @@ function registerGrokToml(entry) {
   const configPath = join(HOME, ".grok", "config.toml");
   mkdirSync(dirname(configPath), { recursive: true });
 
+  const envToml = UNPAYWALL_EMAIL
+    ? `env = { SCIPDF_DOWNLOAD_DIR = ${JSON.stringify(DOWNLOAD_DIR)}, SCIPDF_UNPAYWALL_EMAIL = ${JSON.stringify(UNPAYWALL_EMAIL)} }`
+    : `env = { SCIPDF_DOWNLOAD_DIR = ${JSON.stringify(DOWNLOAD_DIR)} }`;
+
   const section = `
 # --- scipdf-mcp (auto-installed) ---
 [mcp_servers.scipdf]
@@ -195,7 +204,7 @@ args = [${JSON.stringify(entry)}]
 enabled = true
 startup_timeout_sec = 30
 tool_timeout_sec = 120
-env = { SCIPDF_DOWNLOAD_DIR = ${JSON.stringify(DOWNLOAD_DIR)} }
+${envToml}
 `;
 
   let text = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
@@ -281,6 +290,7 @@ function printSummary(entry) {
 
   Entry:     ${entry}
   Papers:    ${DOWNLOAD_DIR}
+  Unpaywall: ${UNPAYWALL_EMAIL ? "email set (OA-first)" : "not set — export SCIPDF_UNPAYWALL_EMAIL=you@example.com"}
   Skill:     ~/.grok/skills/scipdf  (also ~/.claude / ~/.agents)
   MCP name:  scipdf
   CLI:       node ${entry} download <doi|title>

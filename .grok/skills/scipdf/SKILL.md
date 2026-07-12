@@ -15,6 +15,13 @@ metadata:
 
 目标：用户要论文 → **DOI** → 本地下载 → 返回 **path**（+ 可选引用格式）。
 
+下载顺序（MCP 内部）：
+
+1. **Unpaywall OA**（需用户配置邮箱 `SCIPDF_UNPAYWALL_EMAIL`）  
+2. Sci-Hub / pdfHosts（`SCIPDF_ALLOW_SCIHUB`，默认开）
+
+未配置邮箱时跳过 Unpaywall，直接走 Sci-Hub；不要假装已走 OA。
+
 ## 前置条件 / 诊断
 
 1. 工具列表应有 `download_paper`（MCP 名 `scipdf`）。

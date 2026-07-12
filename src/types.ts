@@ -29,6 +29,15 @@ export interface SciPdfConfig {
   /** Global rate limit: min gap between outbound requests (ms) */
   minRequestGapMs: number;
   debug: boolean;
+  /**
+   * Email required by Unpaywall API (not used for marketing; API policy).
+   * Env: SCIPDF_UNPAYWALL_EMAIL
+   */
+  unpaywallEmail?: string;
+  /** Try Unpaywall OA first when email is set (default true) */
+  preferOa: boolean;
+  /** Allow Sci-Hub / pdfHosts fallback after OA (default true) */
+  allowScihub: boolean;
 }
 
 export type QueryType = "auto" | "doi" | "url" | "title" | "citation";
@@ -42,8 +51,16 @@ export interface DownloadResult {
   authors?: string[];
   year?: number;
   path?: string;
-  source?: "scihub" | "cache";
+  source?: "scihub" | "unpaywall" | "cache";
   mirror?: string;
+  /** OA license / version hint when source is unpaywall */
+  oa?: {
+    hostType?: string;
+    version?: string;
+    license?: string;
+    pdfUrl?: string;
+  };
+
   bytes?: number;
   cached?: boolean;
   code?: ErrorCode;

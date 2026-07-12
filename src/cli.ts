@@ -39,13 +39,17 @@ Usage:
   scipdf-mcp parse <file|->      Extract DOIs from bib/ris/text file (or stdin)
   scipdf-mcp list                List downloaded PDFs
   scipdf-mcp check-mirrors       Probe mirrors
+  scipdf-mcp unpaywall <doi>     Lookup Unpaywall OA (needs email)
   scipdf-mcp open <path>         Open PDF in system viewer
   scipdf-mcp version
 
 Env:
-  SCIPDF_DOWNLOAD_DIR   Default ~/Documents/Papers
-  SCIPDF_DEBUG=1        Verbose logs
-  SCIPDF_FILENAME_STYLE doi | author_year_title
+  SCIPDF_DOWNLOAD_DIR      Default ~/Documents/Papers
+  SCIPDF_UNPAYWALL_EMAIL   Your email for Unpaywall API (required for OA)
+  SCIPDF_PREFER_OA         true/false, default true
+  SCIPDF_ALLOW_SCIHUB      true/false, default true
+  SCIPDF_DEBUG=1           Verbose logs
+  SCIPDF_FILENAME_STYLE    doi | author_year_title
 `);
 }
 
@@ -158,6 +162,35 @@ export async function runCli(argv: string[]): Promise<number> {
     );
     console.log(JSON.stringify({ mirrors: statuses }, null, 2));
     return 0;
+  }
+
+  if (cmd === "unpaywall") {
+    const doi = rest.join(" ").trim();
+    if (!doi) {
+      console.error("Usage: scipdf-mcp unpaywall <doi>");
+      console.error("Requires SCIPDF_UNPAYWALL_EMAIL=you@example.com");
+      return 1;
+    }
+    const { lookupUnpaywall, hasUnpaywallEmail } = await import(
+      "./core/unpaywall.js"
+    );
+    if (!hasUnpaywallEmail(config)) {
+      console.error(
+        JSON.stringify(
+          {
+            ok: false,
+            error:
+              "Set SCIPDF_UNPAYWALL_EMAIL to a real email you own (Unpaywall API requirement).",
+          },
+          null,
+          2,
+        ),
+      );
+      return 1;
+    }
+    const meta = await lookupUnpaywall(doi, config);
+    console.log(JSON.stringify({ ok: Boolean(meta), ...meta }, null, 2));
+    return meta ? 0 : 1;
   }
 
   if (cmd === "open") {

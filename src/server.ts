@@ -12,6 +12,11 @@ import { checkMirror } from "./core/scihub.js";
 import { listPaperFiles } from "./core/storage.js";
 import { openPath } from "./core/open.js";
 import { buildCitations } from "./core/citeFormat.js";
+import {
+  hasUnpaywallEmail,
+  lookupUnpaywall,
+  maskEmail,
+} from "./core/unpaywall.js";
 import type { QueryType, SciPdfConfig } from "./types.js";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -64,8 +69,9 @@ export function createServer(): McpServer {
 
   server.tool(
     "download_paper",
-    "Download an academic paper PDF by DOI, title, URL, or citation. Returns local path, DOI, optional APA/GB/T/BibTeX. On title failure returns code DOI_NOT_FOUND with candidates. Use force=true to re-download.",
+    "Download an academic paper PDF by DOI, title, URL, or citation. Prefers Unpaywall Open Access when SCIPDF_UNPAYWALL_EMAIL is set, then Sci-Hub/pdfHosts. Returns local path, source (unpaywall|scihub|cache), citations. Use force=true to re-download.",
     {
+
       query: z
         .string()
         .describe("DOI (10.xxxx/...), title, publisher URL, or citation string"),
@@ -159,7 +165,7 @@ export function createServer(): McpServer {
 
   server.tool(
     "list_mirrors",
-    "List configured Sci-Hub mirrors, PDF hosts, and settings (hot-reloads config).",
+    "List configured Sci-Hub mirrors, PDF hosts, Unpaywall status, and settings (hot-reloads config).",
     {},
     async () => {
       refreshConfig();
@@ -172,7 +178,45 @@ export function createServer(): McpServer {
         timeoutMs: config.timeoutMs,
         concurrency: config.concurrency,
         healthCacheTtlMs: config.healthCacheTtlMs,
+        unpaywall: {
+          configured: hasUnpaywallEmail(config),
+          email: config.unpaywallEmail
+            ? maskEmail(config.unpaywallEmail)
+            : null,
+          preferOa: config.preferOa,
+          allowScihub: config.allowScihub,
+          hint: hasUnpaywallEmail(config)
+            ? "OA-first then Sci-Hub fallback"
+            : "Set SCIPDF_UNPAYWALL_EMAIL to enable Unpaywall OA lookup",
+        },
       });
+    },
+  );
+
+  server.tool(
+    "lookup_unpaywall",
+    "Query Unpaywall for Open Access status and PDF URL (does not download). Requires SCIPDF_UNPAYWALL_EMAIL.",
+    {
+      doi: z.string().describe("DOI e.g. 10.1038/nature12373"),
+    },
+    async ({ doi }) => {
+      refreshConfig();
+      if (!hasUnpaywallEmail(config)) {
+        return jsonResult({
+          ok: false,
+          error:
+            "Unpaywall email not configured. Set env SCIPDF_UNPAYWALL_EMAIL or config.json unpaywallEmail to a real email you own (required by Unpaywall API).",
+        });
+      }
+      const meta = await lookupUnpaywall(doi, config);
+      if (!meta) {
+        return jsonResult({
+          ok: false,
+          error: "Unpaywall request failed or returned nothing",
+          doi,
+        });
+      }
+      return jsonResult({ ok: true, ...meta });
     },
   );
 

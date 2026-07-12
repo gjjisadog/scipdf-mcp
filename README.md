@@ -81,11 +81,34 @@ node dist/index.js check-mirrors
 | 变量 | 含义 | 默认 |
 |------|------|------|
 | `SCIPDF_DOWNLOAD_DIR` | 保存目录 | `~/Documents/Papers` |
+| `SCIPDF_UNPAYWALL_EMAIL` | **Unpaywall 邮箱（你自己的真实邮箱）** | 未设置则跳过 OA |
+| `SCIPDF_PREFER_OA` | 是否优先 Unpaywall | `true` |
+| `SCIPDF_ALLOW_SCIHUB` | OA 失败后是否走 Sci-Hub | `true` |
 | `SCIPDF_FILENAME_STYLE` | `doi` 或 `author_year_title` | `doi` |
 | `SCIPDF_PDF_HOSTS` | 直连 PDF 主机 | `sci.bban.top/pdf/` |
 | `SCIPDF_MIRRORS` | HTML 镜像列表 | 内置 |
 | `SCIPDF_DEBUG=1` | 调试日志 | off |
 | `SCIPDF_HEALTH_TTL_MS` | 镜像健康缓存 | 15min |
+
+### Unpaywall（合法 OA）
+
+[Unpaywall](https://unpaywall.org/products/api) 要求请求里带**你自己的邮箱**（统计用量，非注册付费）。
+
+```bash
+export SCIPDF_UNPAYWALL_EMAIL="you@example.com"
+# 或 config.json: "unpaywallEmail": "you@example.com"
+```
+
+Grok MCP 配置示例：
+
+```toml
+[mcp_servers.scipdf]
+command = "node"
+args = ["/path/to/scipdf-mcp/dist/index.js"]
+env = { SCIPDF_DOWNLOAD_DIR = "/Users/you/Documents/Papers", SCIPDF_UNPAYWALL_EMAIL = "you@example.com" }
+```
+
+下载顺序：`Unpaywall OA → Sci-Hub/pdfHosts`。仅 OA：`SCIPDF_ALLOW_SCIHUB=false`。
 
 见 `config.example.json`。
 

@@ -1,5 +1,8 @@
 {
   "downloadDir": "~/Documents/Papers",
+  "unpaywallEmail": "you@example.com",
+  "preferOa": true,
+  "allowScihub": true,
   "scihubMirrors": [
     "https://sci-hub.ren/",
     "https://sci-hub.red/",

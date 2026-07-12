@@ -96,6 +96,24 @@ export function loadConfig(): SciPdfConfig {
     file.filenameStyle ??
     "doi") as FilenameStyle;
 
+  const unpaywallEmail = (
+    process.env.SCIPDF_UNPAYWALL_EMAIL ??
+    (file.unpaywallEmail as string | undefined) ??
+    ""
+  ).trim() || undefined;
+
+  const preferOaEnv = process.env.SCIPDF_PREFER_OA;
+  const preferOa =
+    preferOaEnv != null
+      ? preferOaEnv !== "0" && preferOaEnv.toLowerCase() !== "false"
+      : file.preferOa !== false;
+
+  const allowScihubEnv = process.env.SCIPDF_ALLOW_SCIHUB;
+  const allowScihub =
+    allowScihubEnv != null
+      ? allowScihubEnv !== "0" && allowScihubEnv.toLowerCase() !== "false"
+      : file.allowScihub !== false;
+
   return {
     downloadDir,
     scihubMirrors: mirrors,
@@ -121,6 +139,9 @@ export function loadConfig(): SciPdfConfig {
         ? minRequestGapMs
         : 200,
     debug: process.env.SCIPDF_DEBUG === "1" || Boolean(file.debug),
+    unpaywallEmail,
+    preferOa,
+    allowScihub,
   };
 }
 
