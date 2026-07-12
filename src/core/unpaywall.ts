@@ -2,6 +2,7 @@ import type { SciPdfConfig } from "../types.js";
 import { throttle } from "./rateLimit.js";
 import { debugLog } from "./debug.js";
 import { isPdfBuffer } from "./storage.js";
+import { fetchBuffer, fetchJson } from "./http.js";
 
 const API = "https://api.unpaywall.org/v2";
 
@@ -72,17 +73,18 @@ export async function lookupUnpaywall(
 
   await throttle(config.minRequestGapMs);
   const url = `${API}/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        "User-Agent": `scipdf-mcp/0.3 (mailto:${email})`,
+    const { response: res, data } = await fetchJson<UnpaywallResponse>(
+      url,
+      {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": `scipdf-mcp/0.3 (mailto:${email})`,
+        },
       },
-    });
+      config.timeoutMs,
+    );
     if (res.status === 404) {
       return { doi, is_oa: false };
     }
@@ -93,11 +95,10 @@ export async function lookupUnpaywall(
       );
       return null;
     }
-    if (!res.ok) {
+    if (!res.ok || !data) {
       debugLog(config, "unpaywall HTTP", res.status, doi);
       return null;
     }
-    const data = (await res.json()) as UnpaywallResponse;
     const locations = [
       data.best_oa_location,
       ...(data.oa_locations ?? []),
@@ -134,8 +135,6 @@ export async function lookupUnpaywall(
   } catch (e) {
     debugLog(config, "unpaywall error", e);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -145,28 +144,24 @@ export async function downloadOaPdf(
   config: SciPdfConfig,
 ): Promise<Uint8Array> {
   await throttle(config.minRequestGapMs);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
-  try {
-    const res = await fetch(pdfUrl, {
-      signal: controller.signal,
+  const { response: res, buffer: buf } = await fetchBuffer(
+    pdfUrl,
+    {
       redirect: "follow",
       headers: {
         "User-Agent": config.userAgent,
         Accept: "application/pdf,*/*",
       },
-    });
-    if (!res.ok) {
-      throw new Error(`OA PDF HTTP ${res.status}: ${pdfUrl}`);
-    }
-    const buf = new Uint8Array(await res.arrayBuffer());
-    if (!isPdfBuffer(buf)) {
-      throw new Error(`OA URL did not return a PDF: ${pdfUrl}`);
-    }
-    return buf;
-  } finally {
-    clearTimeout(timer);
+    },
+    config.timeoutMs,
+  );
+  if (!res.ok) {
+    throw new Error(`OA PDF HTTP ${res.status}: ${pdfUrl}`);
   }
+  if (!isPdfBuffer(buf)) {
+    throw new Error(`OA URL did not return a PDF: ${pdfUrl}`);
+  }
+  return buf;
 }
 
 /**

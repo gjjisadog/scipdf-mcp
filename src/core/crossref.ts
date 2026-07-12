@@ -1,5 +1,6 @@
 import type { CrossrefWork } from "../types.js";
 import { normalizeDoi } from "./doi.js";
+import { fetchJson } from "./http.js";
 
 const CROSSREF_BASE = "https://api.crossref.org";
 
@@ -32,30 +33,26 @@ function mapWork(item: CrossrefMessage): CrossrefWork | null {
   };
 }
 
+const headers = {
+  Accept: "application/json",
+  "User-Agent": "scipdf-mcp/0.3 (mailto:research@localhost)",
+};
+
 export async function getWorkByDoi(
   doi: string,
   timeoutMs = 15_000,
 ): Promise<CrossrefWork | null> {
   const url = `${CROSSREF_BASE}/works/${encodeURIComponent(doi)}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "scipdf-mcp/0.1 (mailto:research@localhost)",
-      },
-    });
-    if (!res.ok) return null;
-    const json = (await res.json()) as { message?: CrossrefMessage };
-    if (!json.message) return null;
-    return mapWork(json.message);
+    const { response, data } = await fetchJson<{ message?: CrossrefMessage }>(
+      url,
+      { headers },
+      timeoutMs,
+    );
+    if (!response.ok || !data?.message) return null;
+    return mapWork(data.message);
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -70,29 +67,17 @@ export async function searchByTitle(
     select: "DOI,title,author,published,container-title,score",
   });
   const url = `${CROSSREF_BASE}/works?${params}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "scipdf-mcp/0.1 (mailto:research@localhost)",
-      },
-    });
-    if (!res.ok) return [];
-    const json = (await res.json()) as {
+    const { response, data } = await fetchJson<{
       message?: { items?: CrossrefMessage[] };
-    };
-    const items = json.message?.items ?? [];
+    }>(url, { headers }, timeoutMs);
+    if (!response.ok) return [];
+    const items = data?.message?.items ?? [];
     return items
       .map(mapWork)
       .filter((w): w is CrossrefWork => w !== null);
   } catch {
     return [];
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -113,7 +98,6 @@ export function pickBestWork(
   if (works.length === 0) return null;
   const best = works[0];
 
-  // Exact / near-exact title match: accept even if Crossref score is modest
   if (queryTitle && best.title) {
     const q = normalizeTitle(queryTitle);
     const t = normalizeTitle(best.title);
@@ -122,7 +106,6 @@ export function pickBestWork(
     }
   }
 
-  // Crossref relevance scores for full titles often sit in the 20–45 range
   if (best.score !== undefined && best.score < minScore) return null;
   return best;
 }

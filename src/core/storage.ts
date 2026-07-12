@@ -1,12 +1,21 @@
 import {
   mkdir,
   writeFile,
+  readFile,
   access,
   constants,
   readdir,
   stat,
 } from "node:fs/promises";
-import { dirname, join, resolve, basename } from "node:path";
+import {
+  dirname,
+  join,
+  resolve,
+  basename,
+  relative,
+  isAbsolute,
+  sep,
+} from "node:path";
 import { doiToFilename } from "./doi.js";
 import type { FilenameStyle } from "../types.js";
 
@@ -25,6 +34,31 @@ function sanitizeFilenamePart(s: string, max = 80): string {
     .replace(/^_|_$/g, "");
 }
 
+/**
+ * User-supplied filename must be a single path segment (no traversal).
+ * `../../outside` → `outside.pdf`
+ */
+export function sanitizeUserFilename(override: string): string {
+  // Normalize separators, take basename only
+  let name = override.replace(/\\/g, "/").trim();
+  // Drop any directory components
+  name = basename(name);
+  // Neutralize reserved / empty names
+  name = name.replace(/\0/g, "");
+  if (!name || name === "." || name === ".." || name === ".pdf") {
+    name = "download.pdf";
+  }
+  // Strip remaining path-ish characters
+  name = name.replace(/[/\\]/g, "_");
+  if (!name.toLowerCase().endsWith(".pdf")) {
+    name = `${name}.pdf`;
+  }
+  // Final safety scrub
+  name = sanitizeFilenamePart(name.replace(/\.pdf$/i, ""), 120) + ".pdf";
+  if (name === ".pdf" || name === "_.pdf") name = "download.pdf";
+  return name;
+}
+
 export function buildPdfFilename(
   doi: string,
   style: FilenameStyle,
@@ -32,11 +66,14 @@ export function buildPdfFilename(
   override?: string,
 ): string {
   if (override) {
-    return override.endsWith(".pdf") ? override : `${override}.pdf`;
+    return sanitizeUserFilename(override);
   }
   if (style === "author_year_title" && meta) {
     const author = meta.authors?.[0]
-      ? sanitizeFilenamePart(meta.authors[0].split(/\s+/).pop() || meta.authors[0], 40)
+      ? sanitizeFilenamePart(
+          meta.authors[0].split(/\s+/).pop() || meta.authors[0],
+          40,
+        )
       : "Unknown";
     const year = meta.year ? String(meta.year) : "n.d.";
     const title = meta.title
@@ -45,6 +82,30 @@ export function buildPdfFilename(
     return `${author}_${year}_${title}.pdf`;
   }
   return doiToFilename(doi);
+}
+
+/** Ensure resolved file path stays inside downloadDir */
+export function assertPathInsideDir(downloadDir: string, filePath: string): string {
+  const dir = resolve(downloadDir);
+  const full = resolve(filePath);
+  const rel = relative(dir, full);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(
+      `Refusing path outside download directory: ${filePath} (dir=${dir})`,
+    );
+  }
+  // Disallow writing the directory itself as a "file"
+  if (rel === "") {
+    throw new Error(`Invalid file path equals download directory: ${dir}`);
+  }
+  // No nested dirs from filename (basename only policy)
+  if (rel.includes("..") || rel.includes(sep)) {
+    // basename-only names produce a single segment; reject multi-segment
+    if (rel.split(/[/\\]/).length > 1) {
+      throw new Error(`Refusing nested path: ${rel}`);
+    }
+  }
+  return full;
 }
 
 export function buildPdfPath(
@@ -68,13 +129,25 @@ export function buildPdfPath(
     },
     opts?.filename,
   );
-  return join(resolve(downloadDir), name);
+  // name is basename-only after sanitize
+  const full = join(resolve(downloadDir), basename(name));
+  return assertPathInsideDir(downloadDir, full);
 }
 
 export async function fileExists(path: string): Promise<boolean> {
   try {
     await access(path, constants.F_OK);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True if file exists and looks like a real PDF */
+export async function isValidPdfFile(path: string): Promise<boolean> {
+  try {
+    const buf = await readFile(path);
+    return isPdfBuffer(buf);
   } catch {
     return false;
   }
@@ -89,12 +162,31 @@ export async function savePdf(
   return data.byteLength;
 }
 
+/**
+ * PDF magic: after optional leading whitespace/NUL, must start with %PDF-
+ * (not merely contain "%PDF" somewhere in the first KiB — that accepts HTML bait).
+ */
 export function isPdfBuffer(data: Uint8Array): boolean {
   if (data.byteLength < 5) return false;
-  const head = Buffer.from(
-    data.subarray(0, Math.min(1024, data.byteLength)),
-  ).toString("latin1");
-  return head.includes("%PDF");
+  const limit = Math.min(1024, data.byteLength);
+  let i = 0;
+  while (i < limit) {
+    const b = data[i];
+    // space, tab, CR, LF, NUL
+    if (b === 0x20 || b === 0x09 || b === 0x0d || b === 0x0a || b === 0x00) {
+      i++;
+      continue;
+    }
+    break;
+  }
+  if (i + 5 > data.byteLength) return false;
+  return (
+    data[i] === 0x25 && // %
+    data[i + 1] === 0x50 && // P
+    data[i + 2] === 0x44 && // D
+    data[i + 3] === 0x46 && // F
+    data[i + 4] === 0x2d // -
+  );
 }
 
 export interface PaperFileInfo {
@@ -143,7 +235,11 @@ export async function writeManifest(
   filename = "scipdf-manifest.json",
 ): Promise<string> {
   const dir = await ensureDir(downloadDir);
-  const path = join(dir, filename);
+  let name = basename(filename.replace(/\\/g, "/"));
+  name = name.replace(/[^\w.\-]+/g, "_");
+  if (!name.toLowerCase().endsWith(".json")) name = "scipdf-manifest.json";
+  if (!name || name === ".json") name = "scipdf-manifest.json";
+  const path = assertPathInsideDir(dir, join(dir, name));
   const payload = {
     generatedAt: new Date().toISOString(),
     count: results.length,

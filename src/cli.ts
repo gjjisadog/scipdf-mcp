@@ -120,6 +120,8 @@ export async function runCli(argv: string[]): Promise<number> {
     }
     const result = await downloadPapers(rest, config, { writeManifest: true });
     console.log(JSON.stringify(result, null, 2));
+    // Empty after dedupe/trim is a failure (e.g. batch '   ')
+    if (result.total === 0) return 1;
     return result.failed === 0 ? 0 : 1;
   }
 

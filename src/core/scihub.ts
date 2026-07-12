@@ -5,6 +5,7 @@ import { getHealth, markBad, markGood, sortByHealth } from "./health.js";
 import { throttle } from "./rateLimit.js";
 import { debugLog } from "./debug.js";
 import { isPdfBuffer } from "./storage.js";
+import { contentTypeIsPdf, fetchBuffer, fetchText } from "./http.js";
 
 const PDF_NOT_AVAILABLE = [
   /Please try to search again using DOI/im,
@@ -102,20 +103,6 @@ function bodyLooksBlocked(html: string): boolean {
   return BLOCKED_BODY.some((re) => re.test(html));
 }
 
-async function fetchWithTimeout(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 function browserHeaders(
   config: SciPdfConfig,
   extra?: Record<string, string>,
@@ -153,7 +140,7 @@ async function downloadPdfBytes(
   await throttle(config.minRequestGapMs);
   const url = cleanPdfUrl(pdfUrl);
   const start = Date.now();
-  const res = await fetchWithTimeout(
+  const { response: res, buffer: buf } = await fetchBuffer(
     url,
     {
       headers: browserHeaders(config, {
@@ -172,9 +159,7 @@ async function downloadPdfBytes(
     throw new MirrorError(`PDF download failed: HTTP ${res.status} (${url})`);
   }
 
-  const buf = new Uint8Array(await res.arrayBuffer());
   if (!isPdfBuffer(buf)) {
-    // might be HTML challenge page
     const text = Buffer.from(buf.subarray(0, 2000)).toString("utf8");
     if (bodyLooksBlocked(text)) {
       throw new MirrorError(`PDF host returned challenge page: ${url}`);
@@ -196,7 +181,8 @@ export async function fetchFromMirror(
   const start = Date.now();
   const timeout = Math.min(config.timeoutMs, config.fastFailTimeoutMs + 5000);
 
-  const res = await fetchWithTimeout(
+  // Always read body under the same timeout (headers + body)
+  const { response: res, buffer } = await fetchBuffer(
     pageUrl,
     {
       headers: browserHeaders(config, { Referer: base }),
@@ -216,18 +202,16 @@ export async function fetchFromMirror(
     throw new MirrorError(`Mirror HTTP ${res.status}: ${pageUrl}`);
   }
 
-  const contentType = res.headers.get("content-type") ?? "";
-  if (contentType.includes("application/pdf")) {
-    const pdfBytes = new Uint8Array(await res.arrayBuffer());
-    if (!isPdfBuffer(pdfBytes)) {
+  if (contentTypeIsPdf(res.headers.get("content-type")) || isPdfBuffer(buffer)) {
+    if (!isPdfBuffer(buffer)) {
       markBad(base, "invalid pdf body", latency);
       throw new MirrorError("Direct response claimed PDF but content invalid");
     }
     markGood(base, latency);
-    return { pdfBytes, mirror: base, pdfUrl: pageUrl };
+    return { pdfBytes: buffer, mirror: base, pdfUrl: pageUrl };
   }
 
-  const html = await res.text();
+  const html = Buffer.from(buffer).toString("utf8");
   if (bodyLooksBlocked(html)) {
     markBad(base, "cloudflare/ddos challenge", latency);
     throw new MirrorError(`Mirror blocked (challenge page): ${pageUrl}`);
@@ -241,7 +225,6 @@ export async function fetchFromMirror(
   }
 
   if (bodyLooksUnavailable(html)) {
-    // not a mirror failure — paper missing
     markGood(base, latency);
     throw new PdfNotFoundError(`PDF not available on Sci-Hub for DOI ${doi}`);
   }
@@ -357,7 +340,7 @@ export async function checkMirror(
   }
   const start = Date.now();
   try {
-    const res = await fetchWithTimeout(
+    const { response: res, text } = await fetchText(
       url,
       {
         method: "GET",
@@ -374,7 +357,6 @@ export async function checkMirror(
       markBad(url, `HTTP ${res.status}`, latencyMs);
       return { ok: false, latencyMs, error: `HTTP ${res.status}` };
     }
-    const text = await res.text();
     if (bodyLooksBlocked(text)) {
       markBad(url, "challenge page", latencyMs);
       return { ok: false, latencyMs, error: "challenge page" };

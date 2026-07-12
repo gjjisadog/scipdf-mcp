@@ -2,7 +2,9 @@ import { spawn } from "node:child_process";
 import { platform } from "node:os";
 import { access, constants } from "node:fs/promises";
 
-export async function openPath(path: string): Promise<{ ok: boolean; error?: string }> {
+export async function openPath(
+  path: string,
+): Promise<{ ok: boolean; error?: string }> {
   try {
     await access(path, constants.F_OK);
   } catch {
@@ -24,9 +26,32 @@ export async function openPath(path: string): Promise<{ ok: boolean; error?: str
   }
 
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: { ok: boolean; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
     const child = spawn(cmd, args, { detached: true, stdio: "ignore" });
-    child.on("error", (e) => resolve({ ok: false, error: e.message }));
-    child.unref();
-    resolve({ ok: true });
+    child.once("error", (e) => {
+      finish({ ok: false, error: e.message });
+    });
+    // Node emits 'spawn' when the process successfully starts
+    child.once("spawn", () => {
+      child.unref();
+      finish({ ok: true });
+    });
+    // Fallback if 'spawn' is unavailable (very old runtimes)
+    setTimeout(() => {
+      if (!settled) {
+        try {
+          child.unref();
+        } catch {
+          /* ignore */
+        }
+        finish({ ok: true });
+      }
+    }, 500);
   });
 }

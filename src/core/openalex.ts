@@ -1,5 +1,6 @@
 import type { CrossrefWork } from "../types.js";
 import { normalizeDoi } from "./doi.js";
+import { fetchJson } from "./http.js";
 
 const OPENALEX = "https://api.openalex.org";
 
@@ -38,24 +39,22 @@ export async function searchOpenAlex(
     per_page: String(perPage),
   });
   const url = `${OPENALEX}/works?${params}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "scipdf-mcp/0.2 (mailto:research@localhost)",
+    const { response, data } = await fetchJson<{ results?: OpenAlexWork[] }>(
+      url,
+      {
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "scipdf-mcp/0.3 (mailto:research@localhost)",
+        },
       },
-    });
-    if (!res.ok) return [];
-    const json = (await res.json()) as { results?: OpenAlexWork[] };
-    return (json.results ?? [])
+      timeoutMs,
+    );
+    if (!response.ok) return [];
+    return (data?.results ?? [])
       .map(mapWork)
       .filter((w): w is CrossrefWork => w !== null);
   } catch {
     return [];
-  } finally {
-    clearTimeout(timer);
   }
 }

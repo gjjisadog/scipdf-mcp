@@ -25,7 +25,7 @@ import { SciPdfError, codeFromError } from "./errors.js";
 import {
   buildPdfPath,
   ensureDir,
-  fileExists,
+  isValidPdfFile,
   savePdf,
   writeManifest,
 } from "./storage.js";
@@ -136,7 +136,7 @@ export async function resolveToDoi(
     };
   }
 
-  // Ambiguous: top two very close scores and different DOIs
+  // Ambiguous: top two very close scores and different DOIs — do not auto-pick
   if (
     pool.length >= 2 &&
     pool[0].doi !== pool[1].doi &&
@@ -149,17 +149,12 @@ export async function resolveToDoi(
       pool[0].title.toLowerCase().includes(q.toLowerCase().slice(0, 20))
     )
   ) {
-    // still return best but flag candidates for agent confirmation
     return {
-      ok: true,
+      ok: false,
       query: q0,
-      doi: best.doi,
-      title: best.title,
-      authors: best.authors,
-      year: best.year,
-      container: best.container,
-      source,
       code: "AMBIGUOUS_DOI",
+      error:
+        "Multiple close DOI matches; pass an explicit DOI (query_type=doi) instead of auto-picking.",
       candidates,
     };
   }
@@ -199,6 +194,19 @@ export async function downloadPaper(
       };
     }
 
+    // Refuse silent download on ambiguity (even if a doi field were present)
+    if (resolved.code === "AMBIGUOUS_DOI") {
+      return {
+        ok: false,
+        query,
+        code: "AMBIGUOUS_DOI",
+        error:
+          resolved.error ??
+          "Ambiguous DOI match; confirm a candidate before downloading.",
+        candidates: resolved.candidates,
+      };
+    }
+
     const doi = resolved.doi;
     const title = resolved.title;
     const authors = resolved.authors;
@@ -225,7 +233,8 @@ export async function downloadPaper(
           })
         : undefined;
 
-    if (!options.force && (await fileExists(path))) {
+    // Cache hit only if file exists AND is a real PDF (reject corrupt/HTML bait)
+    if (!options.force && (await isValidPdfFile(path))) {
       return {
         ok: true,
         query,
@@ -371,6 +380,17 @@ export async function downloadPapers(
   });
 
   const { list, deduped } = dedupeQueries(expanded);
+
+  if (list.length === 0) {
+    return {
+      results: [],
+      succeeded: 0,
+      failed: 0,
+      total: 0,
+      deduped,
+    };
+  }
+
   const results = await mapPool(list, config.concurrency, async (query, index) => {
     const r = await downloadPaper({ query, ...extras }, config);
     return { ...r, index };
