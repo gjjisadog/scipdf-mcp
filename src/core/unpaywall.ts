@@ -171,13 +171,13 @@ export async function downloadOaPdf(
 
 /**
  * Try Unpaywall: lookup + download PDF if available.
- * Returns null if email missing, not OA, or no usable PDF.
+ * Opt-in only — caller must check preferOa + email.
+ * Returns null if not OA or no usable PDF.
  */
 export async function fetchPdfViaUnpaywall(
   doi: string,
   config: SciPdfConfig,
 ): Promise<{ pdfBytes: Uint8Array; pdfUrl: string; meta: UnpaywallResult } | null> {
-  if (!config.preferOa) return null;
   if (!hasUnpaywallEmail(config)) {
     debugLog(config, "unpaywall skipped: no email configured");
     return null;

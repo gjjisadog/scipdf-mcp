@@ -45,9 +45,9 @@ Usage:
 
 Env:
   SCIPDF_DOWNLOAD_DIR      Default ~/Documents/Papers
-  SCIPDF_UNPAYWALL_EMAIL   Your email for Unpaywall API (required for OA)
-  SCIPDF_PREFER_OA         true/false, default true
-  SCIPDF_ALLOW_SCIHUB      true/false, default true
+  SCIPDF_UNPAYWALL_EMAIL   Optional real email (Unpaywall API)
+  SCIPDF_PREFER_OA         true to try OA before Sci-Hub (default false)
+  SCIPDF_ALLOW_SCIHUB      true/false, default true (main path)
   SCIPDF_DEBUG=1           Verbose logs
   SCIPDF_FILENAME_STYLE    doi | author_year_title
 `);

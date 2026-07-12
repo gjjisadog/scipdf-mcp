@@ -290,7 +290,7 @@ function printSummary(entry) {
 
   Entry:     ${entry}
   Papers:    ${DOWNLOAD_DIR}
-  Unpaywall: ${UNPAYWALL_EMAIL ? "email set (OA-first)" : "not set — export SCIPDF_UNPAYWALL_EMAIL=you@example.com"}
+  Unpaywall: ${UNPAYWALL_EMAIL ? "email set (still Sci-Hub default; OA needs SCIPDF_PREFER_OA=true)" : "optional — default is Sci-Hub only"}
   Skill:     ~/.grok/skills/scipdf  (also ~/.claude / ~/.agents)
   MCP name:  scipdf
   CLI:       node ${entry} download <doi|title>

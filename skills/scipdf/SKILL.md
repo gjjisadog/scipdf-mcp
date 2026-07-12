@@ -17,10 +17,11 @@ metadata:
 
 下载顺序（MCP 内部）：
 
-1. **Unpaywall OA**（需用户配置邮箱 `SCIPDF_UNPAYWALL_EMAIL`）  
-2. Sci-Hub / pdfHosts（`SCIPDF_ALLOW_SCIHUB`，默认开）
+1. **默认：Sci-Hub / pdfHosts**（始终主路径，无需额外配置）  
+2. **可选 Unpaywall OA**：仅当用户同时配置了  
+   `SCIPDF_UNPAYWALL_EMAIL` **且** `SCIPDF_PREFER_OA=true` 时，才在 Sci-Hub **之前**尝试合法 OA  
 
-未配置邮箱时跳过 Unpaywall，直接走 Sci-Hub；不要假装已走 OA。
+未配置邮箱 / 未开 PREFER_OA → 行为与纯 Sci-Hub 一致。不要要求用户必须配邮箱。
 
 ## 前置条件 / 诊断
 

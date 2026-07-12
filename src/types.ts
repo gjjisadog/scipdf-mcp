@@ -30,13 +30,17 @@ export interface SciPdfConfig {
   minRequestGapMs: number;
   debug: boolean;
   /**
-   * Email required by Unpaywall API (not used for marketing; API policy).
-   * Env: SCIPDF_UNPAYWALL_EMAIL
+   * Optional. Unpaywall only runs when this is set AND preferOa is true.
+   * Env: SCIPDF_UNPAYWALL_EMAIL (must be a real email you own)
    */
   unpaywallEmail?: string;
-  /** Try Unpaywall OA first when email is set (default true) */
+  /**
+   * Opt-in: try Unpaywall OA before Sci-Hub.
+   * Default false — default path is Sci-Hub / pdfHosts.
+   * Env: SCIPDF_PREFER_OA=true
+   */
   preferOa: boolean;
-  /** Allow Sci-Hub / pdfHosts fallback after OA (default true) */
+  /** Allow Sci-Hub / pdfHosts (default true) */
   allowScihub: boolean;
 }
 

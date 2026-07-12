@@ -81,34 +81,47 @@ node dist/index.js check-mirrors
 | 变量 | 含义 | 默认 |
 |------|------|------|
 | `SCIPDF_DOWNLOAD_DIR` | 保存目录 | `~/Documents/Papers` |
-| `SCIPDF_UNPAYWALL_EMAIL` | **Unpaywall 邮箱（你自己的真实邮箱）** | 未设置则跳过 OA |
-| `SCIPDF_PREFER_OA` | 是否优先 Unpaywall | `true` |
-| `SCIPDF_ALLOW_SCIHUB` | OA 失败后是否走 Sci-Hub | `true` |
+| `SCIPDF_UNPAYWALL_EMAIL` | 可选，Unpaywall 真实邮箱 | 未设 = 不用 OA |
+| `SCIPDF_PREFER_OA` | 为 true 时才在 Sci-Hub **前**试 OA | **`false`（默认 Sci-Hub）** |
+| `SCIPDF_ALLOW_SCIHUB` | 是否允许 Sci-Hub（主路径） | `true` |
 | `SCIPDF_FILENAME_STYLE` | `doi` 或 `author_year_title` | `doi` |
 | `SCIPDF_PDF_HOSTS` | 直连 PDF 主机 | `sci.bban.top/pdf/` |
 | `SCIPDF_MIRRORS` | HTML 镜像列表 | 内置 |
 | `SCIPDF_DEBUG=1` | 调试日志 | off |
 | `SCIPDF_HEALTH_TTL_MS` | 镜像健康缓存 | 15min |
 
-### Unpaywall（合法 OA）
+### Unpaywall（可选，非强制）
 
-[Unpaywall](https://unpaywall.org/products/api) 要求请求里带**你自己的邮箱**（统计用量，非注册付费）。
+**默认只走 Sci-Hub**，无需任何邮箱。
+
+若要优先合法 OA，需**同时**配置：
 
 ```bash
-export SCIPDF_UNPAYWALL_EMAIL="you@example.com"
-# 或 config.json: "unpaywallEmail": "you@example.com"
+export SCIPDF_UNPAYWALL_EMAIL="你的真实邮箱@gmail.com"
+export SCIPDF_PREFER_OA=true
 ```
 
-Grok MCP 配置示例：
+[Unpaywall](https://unpaywall.org/products/api) 要求真实邮箱（统计用量，不收费）。`example.com` 无效。
+
+| 配置 | 行为 |
+|------|------|
+| 默认（无邮箱 / 无 PREFER_OA） | 只走 Sci-Hub |
+| 只设邮箱 | 仍默认 Sci-Hub（可用 `unpaywall` 命令单独查询） |
+| 邮箱 + `PREFER_OA=true` | 先 OA，失败再 Sci-Hub |
+| `ALLOW_SCIHUB=false` + 邮箱 + PREFER_OA | 仅 OA |
+
+Grok 示例（可选 OA）：
 
 ```toml
 [mcp_servers.scipdf]
 command = "node"
 args = ["/path/to/scipdf-mcp/dist/index.js"]
-env = { SCIPDF_DOWNLOAD_DIR = "/Users/you/Documents/Papers", SCIPDF_UNPAYWALL_EMAIL = "you@example.com" }
+env = {
+  SCIPDF_DOWNLOAD_DIR = "/Users/you/Documents/Papers",
+  SCIPDF_UNPAYWALL_EMAIL = "you@gmail.com",
+  SCIPDF_PREFER_OA = "true"
+}
 ```
-
-下载顺序：`Unpaywall OA → Sci-Hub/pdfHosts`。仅 OA：`SCIPDF_ALLOW_SCIHUB=false`。
 
 见 `config.example.json`。
 

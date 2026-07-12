@@ -69,7 +69,7 @@ export function createServer(): McpServer {
 
   server.tool(
     "download_paper",
-    "Download an academic paper PDF by DOI, title, URL, or citation. Prefers Unpaywall Open Access when SCIPDF_UNPAYWALL_EMAIL is set, then Sci-Hub/pdfHosts. Returns local path, source (unpaywall|scihub|cache), citations. Use force=true to re-download.",
+    "Download an academic paper PDF by DOI, title, URL, or citation. Default: Sci-Hub/pdfHosts. Optional Unpaywall OA only if SCIPDF_UNPAYWALL_EMAIL is set AND SCIPDF_PREFER_OA=true. Returns path, source (scihub|unpaywall|cache), citations. Use force=true to re-download.",
     {
 
       query: z
@@ -185,9 +185,11 @@ export function createServer(): McpServer {
             : null,
           preferOa: config.preferOa,
           allowScihub: config.allowScihub,
-          hint: hasUnpaywallEmail(config)
-            ? "OA-first then Sci-Hub fallback"
-            : "Set SCIPDF_UNPAYWALL_EMAIL to enable Unpaywall OA lookup",
+          active: hasUnpaywallEmail(config) && config.preferOa,
+          hint:
+            hasUnpaywallEmail(config) && config.preferOa
+              ? "OA-first, then Sci-Hub"
+              : "Default is Sci-Hub. Optional OA: set SCIPDF_UNPAYWALL_EMAIL + SCIPDF_PREFER_OA=true",
         },
       });
     },

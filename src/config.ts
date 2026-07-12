@@ -102,11 +102,12 @@ export function loadConfig(): SciPdfConfig {
     ""
   ).trim() || undefined;
 
+  // OA is opt-in: only when email is set AND preferOa is true (default false → Sci-Hub first)
   const preferOaEnv = process.env.SCIPDF_PREFER_OA;
   const preferOa =
     preferOaEnv != null
-      ? preferOaEnv !== "0" && preferOaEnv.toLowerCase() !== "false"
-      : file.preferOa !== false;
+      ? preferOaEnv === "1" || preferOaEnv.toLowerCase() === "true"
+      : file.preferOa === true;
 
   const allowScihubEnv = process.env.SCIPDF_ALLOW_SCIHUB;
   const allowScihub =

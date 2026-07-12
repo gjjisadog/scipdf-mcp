@@ -1,7 +1,7 @@
 {
   "downloadDir": "~/Documents/Papers",
-  "unpaywallEmail": "you@example.com",
-  "preferOa": true,
+  "unpaywallEmail": "",
+  "preferOa": false,
   "allowScihub": true,
   "scihubMirrors": [
     "https://sci-hub.ren/",

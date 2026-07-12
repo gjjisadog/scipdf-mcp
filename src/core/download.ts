@@ -240,8 +240,12 @@ export async function downloadPaper(
       };
     }
 
-    // 1) Legal OA via Unpaywall (needs user-configured email)
-    if (config.preferOa && hasUnpaywallEmail(config)) {
+    // Default path: Sci-Hub / pdfHosts.
+    // Unpaywall is optional: only if email configured AND preferOa=true.
+    const tryUnpaywall =
+      config.preferOa && hasUnpaywallEmail(config);
+
+    if (tryUnpaywall) {
       const oa = await fetchPdfViaUnpaywall(doi, config);
       if (oa) {
         const bytes = await savePdf(path, oa.pdfBytes);
@@ -267,39 +271,38 @@ export async function downloadPaper(
           },
         };
       }
+      // OA miss → continue to Sci-Hub if allowed
     }
 
-    // 2) Sci-Hub / direct PDF hosts (optional)
-    if (!config.allowScihub) {
+    if (config.allowScihub) {
+      const { pdfBytes, mirror } = await fetchPdfViaSciHub(doi, config);
+      const bytes = await savePdf(path, pdfBytes);
       return {
-        ok: false,
+        ok: true,
         query,
         doi,
         title,
-        code: "PDF_NOT_IN_DB",
-        error: hasUnpaywallEmail(config)
-          ? "No Open Access PDF from Unpaywall, and Sci-Hub fallback is disabled (SCIPDF_ALLOW_SCIHUB=false)."
-          : "Unpaywall email not set and Sci-Hub fallback is disabled. Set SCIPDF_UNPAYWALL_EMAIL and/or enable SCIPDF_ALLOW_SCIHUB.",
+        authors,
+        year,
+        path,
+        source: "scihub",
+        mirror,
+        bytes,
+        cached: false,
+        citation,
         candidates: resolved.candidates,
       };
     }
 
-    const { pdfBytes, mirror } = await fetchPdfViaSciHub(doi, config);
-    const bytes = await savePdf(path, pdfBytes);
-
     return {
-      ok: true,
+      ok: false,
       query,
       doi,
       title,
-      authors,
-      year,
-      path,
-      source: "scihub",
-      mirror,
-      bytes,
-      cached: false,
-      citation,
+      code: "PDF_NOT_IN_DB",
+      error: tryUnpaywall
+        ? "No Open Access PDF from Unpaywall, and Sci-Hub is disabled (SCIPDF_ALLOW_SCIHUB=false)."
+        : "Sci-Hub is disabled and Unpaywall is not enabled. Default is Sci-Hub (SCIPDF_ALLOW_SCIHUB=true). Optional OA: set SCIPDF_UNPAYWALL_EMAIL and SCIPDF_PREFER_OA=true.",
       candidates: resolved.candidates,
     };
   } catch (e) {
