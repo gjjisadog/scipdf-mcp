@@ -12,6 +12,14 @@ const DEFAULT_MIRRORS = [
   "https://sci-hub.box/",
   "https://sci-hub.se/",
   "https://sci-hub.sidesgame.com/",
+  // Verified working (health + sample PDF download)
+  "https://sci-hub.vg/",
+  "https://sci-hub.usualwant.com/",
+  "https://sci-hub.hkvisa.net/",
+  "https://sci-hub.al/",
+  "https://sci-hub.mksa.top/",
+  "https://www.pismin.com/",
+  "https://www.sci-hub.in/",
 ];
 
 const DEFAULT_PDF_HOSTS = ["https://sci.bban.top/pdf/"];
