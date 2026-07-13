@@ -11,6 +11,7 @@ const DEFAULT_MIRRORS = [
   "https://sci-hub.ru/",
   "https://sci-hub.box/",
   "https://sci-hub.se/",
+  "https://sci-hub.sidesgame.com/",
 ];
 
 const DEFAULT_PDF_HOSTS = ["https://sci.bban.top/pdf/"];
