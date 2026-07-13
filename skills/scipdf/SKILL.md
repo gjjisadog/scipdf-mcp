@@ -17,11 +17,15 @@ metadata:
 
 下载顺序（MCP 内部）：
 
-1. **默认：Sci-Hub / pdfHosts**（始终主路径，无需额外配置）  
-2. **可选 Unpaywall OA**：仅当用户同时配置了  
+1. **可选 Unpaywall OA**：仅当用户同时配置了  
    `SCIPDF_UNPAYWALL_EMAIL` **且** `SCIPDF_PREFER_OA=true` 时，才在 Sci-Hub **之前**尝试合法 OA  
+2. **默认：pdfHosts → Sci-Hub 镜像**（始终主路径，无需额外配置）  
+   - pdfHosts 默认：`https://sci.bban.top/pdf/`  
+   - 镜像默认约 15 个（含 ren/red/ee/st/ru/box/se、sidesgame、vg、usualwant、hkvisa、al、mksa.top、pismin、sci-hub.in 等）  
+   - 完整列表见仓库 `src/config.ts` / `config.example.json` / README  
 
-未配置邮箱 / 未开 PREFER_OA → 行为与纯 Sci-Hub 一致。不要要求用户必须配邮箱。
+未配置邮箱 / 未开 PREFER_OA → 行为与纯 Sci-Hub 一致。不要要求用户必须配邮箱。  
+镜像异常时用 `check_mirrors`（可 `force_refresh: true`）；可用 `SCIPDF_MIRRORS` / `SCIPDF_PDF_HOSTS` 覆盖。
 
 ## 前置条件 / 诊断
 

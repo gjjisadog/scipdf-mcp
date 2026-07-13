@@ -1,6 +1,6 @@
 # scipdf-mcp
 
-一键安装的 **学术论文 PDF 下载** 工具：**MCP Server + Skill + CLI**（v0.2）。
+一键安装的 **学术论文 PDF 下载** 工具：**MCP Server + Skill + CLI**（v0.3）。
 
 ```text
 用户要论文 → 解析 DOI（Crossref/OpenAlex）→ 下载 → 返回本地 path + 引用
@@ -55,6 +55,64 @@ node dist/index.js check-mirrors
 
 ---
 
+## 下载顺序与数据源
+
+默认路径（无需邮箱）：
+
+```text
+（可选）Unpaywall OA          # 仅当 SCIPDF_UNPAYWALL_EMAIL + SCIPDF_PREFER_OA=true
+  → pdfHosts 直链 PDF         # 如 sci.bban.top
+  → scihubMirrors HTML 镜像   # 逐个解析页面中的 PDF 链接
+```
+
+健康缓存会跳过近期失败的镜像（`SCIPDF_HEALTH_TTL_MS`，默认 15 分钟）。可用 `check-mirrors` / MCP `check_mirrors` 探测。
+
+### 默认 pdfHosts
+
+| 主机 | 说明 |
+|------|------|
+| `https://sci.bban.top/pdf/` | 优先尝试的 DOI 直链主机 |
+
+### 默认 Sci-Hub 镜像（`DEFAULT_MIRRORS`）
+
+内置 **15** 个 HTML 镜像（以 `src/config.ts` / `config.example.json` 为准）：
+
+| 镜像 | 备注 |
+|------|------|
+| `https://sci-hub.ren/` | 传统域名 |
+| `https://sci-hub.red/` | 传统域名 |
+| `https://sci-hub.ee/` | 传统域名 |
+| `https://sci-hub.st/` | 传统域名（部分网络较慢或拦截） |
+| `https://sci-hub.ru/` | 传统域名 |
+| `https://sci-hub.box/` | 传统域名 |
+| `https://sci-hub.se/` | 传统域名（部分网络 DNS 失败） |
+| `https://sci-hub.sidesgame.com/` | 已实测可下 PDF |
+| `https://sci-hub.vg/` | 已实测可下 PDF |
+| `https://sci-hub.usualwant.com/` | 已实测可下 PDF |
+| `https://sci-hub.hkvisa.net/` | 已实测；可能跳转 usualwant |
+| `https://sci-hub.al/` | 已实测可下 PDF |
+| `https://sci-hub.mksa.top/` | 已实测；可能跳转 pismin |
+| `https://www.pismin.com/` | 已实测可下 PDF |
+| `https://www.sci-hub.in/` | 已实测可下 PDF |
+
+镜像可用性随地区与封锁变化；列表仅作默认回退，**不是**可用性保证。
+
+### 自定义镜像
+
+环境变量（逗号 / 分号 / 换行分隔）：
+
+```bash
+export SCIPDF_MIRRORS="https://sci-hub.vg/,https://www.pismin.com/"
+export SCIPDF_PDF_HOSTS="https://sci.bban.top/pdf/"
+node dist/index.js check-mirrors
+node dist/index.js download --force 10.1038/nature12373
+```
+
+或复制 `config.example.json` → 项目目录 `config.json` / `~/.config/scipdf-mcp/config.json`，编辑 `scihubMirrors` 与 `pdfHosts`。  
+配置优先级：`SCIPDF_*` 环境变量 > 配置文件 > 内置默认。
+
+---
+
 ## MCP Tools / Resources / Prompts
 
 | Tool | 说明 |
@@ -85,8 +143,8 @@ node dist/index.js check-mirrors
 | `SCIPDF_PREFER_OA` | 为 true 时才在 Sci-Hub **前**试 OA | **`false`（默认 Sci-Hub）** |
 | `SCIPDF_ALLOW_SCIHUB` | 是否允许 Sci-Hub（主路径） | `true` |
 | `SCIPDF_FILENAME_STYLE` | `doi` 或 `author_year_title` | `doi` |
-| `SCIPDF_PDF_HOSTS` | 直连 PDF 主机 | `sci.bban.top/pdf/` |
-| `SCIPDF_MIRRORS` | HTML 镜像列表 | 内置 |
+| `SCIPDF_PDF_HOSTS` | 直连 PDF 主机（逗号分隔） | `https://sci.bban.top/pdf/` |
+| `SCIPDF_MIRRORS` | HTML 镜像列表（逗号分隔） | 见上表（15 个） |
 | `SCIPDF_DEBUG=1` | 调试日志 | off |
 | `SCIPDF_HEALTH_TTL_MS` | 镜像健康缓存 | 15min |
 
@@ -105,7 +163,7 @@ export SCIPDF_PREFER_OA=true
 
 | 配置 | 行为 |
 |------|------|
-| 默认（无邮箱 / 无 PREFER_OA） | 只走 Sci-Hub |
+| 默认（无邮箱 / 无 PREFER_OA） | 只走 Sci-Hub / pdfHosts |
 | 只设邮箱 | 仍默认 Sci-Hub（可用 `unpaywall` 命令单独查询） |
 | 邮箱 + `PREFER_OA=true` | 先 OA，失败再 Sci-Hub |
 | `ALLOW_SCIHUB=false` + 邮箱 + PREFER_OA | 仅 OA |

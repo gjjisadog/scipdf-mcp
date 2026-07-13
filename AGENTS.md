@@ -43,4 +43,13 @@ On `DOI_NOT_FOUND`: use `candidates` or web → retry with explicit DOI.
 On `AMBIGUOUS_DOI`: ask user to pick.  
 Never invent a local path.
 
+## Sources (default)
+
+Download order: optional Unpaywall OA → **pdfHosts** → **scihubMirrors**.
+
+- pdfHosts: `https://sci.bban.top/pdf/`
+- Mirrors: 15 built-in (ren/red/ee/st/ru/box/se, sidesgame, vg, usualwant, hkvisa, al, mksa.top, pismin, sci-hub.in) — see `src/config.ts` / README
+- Override: `SCIPDF_MIRRORS`, `SCIPDF_PDF_HOSTS`, or `config.json`
+- Probe: `node dist/index.js check-mirrors` or MCP `check_mirrors`
+
 See `skills/scipdf/SKILL.md`.
