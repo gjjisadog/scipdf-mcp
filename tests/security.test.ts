@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPdfPath,
   isPdfBuffer,
+  isValidPdfFile,
   sanitizeUserFilename,
   MIN_PDF_BYTES,
 } from "../src/core/storage.js";
@@ -10,6 +11,8 @@ import { contentTypeIsPdf } from "../src/core/http.js";
 import { assertSafePublicUrl, isBlockedHostname } from "../src/core/urlSafety.js";
 import { pickBestWork, normalizeTitle } from "../src/core/crossref.js";
 import { join } from "node:path";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 function fakePdf(extra = 0): Buffer {
   // Valid-looking PDF: header + padding + %%EOF (must be >= MIN_PDF_BYTES)
@@ -40,6 +43,19 @@ describe("path traversal / filename sanitize", () => {
     const b = buildPdfPath(dir, "10.1000/a:b");
     expect(a).not.toBe(b);
   });
+
+  it("author_year_title keeps distinct paths for same author/year/title", () => {
+    const dir = "/tmp/papers";
+    const meta = {
+      style: "author_year_title" as const,
+      title: "A Very Long Shared Title About Quantum Something",
+      authors: ["Alice Zhang"],
+      year: 2020,
+    };
+    const a = buildPdfPath(dir, "10.1000/paper-one", meta);
+    const b = buildPdfPath(dir, "10.1000/paper-two", meta);
+    expect(a).not.toBe(b);
+  });
 });
 
 describe("isPdfBuffer", () => {
@@ -68,6 +84,34 @@ describe("isPdfBuffer", () => {
     expect(isPdfBuffer(Buffer.from("%PDF-1.4\n" + "y".repeat(300)))).toBe(
       false,
     );
+  });
+});
+
+describe("isValidPdfFile", () => {
+  it("accepts large PDFs using head+tail (no full-buffer %%EOF requirement)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scipdf-pdf-"));
+    const path = join(dir, "large.pdf");
+    try {
+      const size = 2 * 1024 * 1024 + 64;
+      const buf = Buffer.alloc(size, 0x20);
+      buf.write("%PDF-1.4\n", 0);
+      buf.write("%%EOF\n", size - 6);
+      await writeFile(path, buf);
+      expect(await isValidPdfFile(path)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-pdf files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "scipdf-pdf-"));
+    const path = join(dir, "x.pdf");
+    try {
+      await writeFile(path, "not a pdf" + "x".repeat(300));
+      expect(await isValidPdfFile(path)).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -114,8 +158,16 @@ describe("SSRF protection", () => {
     expect(isBlockedHostname("sci-hub.se")).toBe(false);
   });
 
+  it("blocks short-form and decimal loopback", () => {
+    expect(isBlockedHostname("127.1")).toBe(true);
+    expect(isBlockedHostname("0")).toBe(true);
+    expect(isBlockedHostname("2130706433")).toBe(true); // 127.0.0.1
+    expect(isBlockedHostname("10.1")).toBe(true);
+  });
+
   it("assertSafePublicUrl rejects private URLs", () => {
     expect(() => assertSafePublicUrl("http://127.0.0.1:9/")).toThrow(/SSRF|private/i);
+    expect(() => assertSafePublicUrl("http://127.1/")).toThrow(/SSRF|private/i);
     expect(() => assertSafePublicUrl("https://sci-hub.se/")).not.toThrow();
   });
 });
@@ -148,5 +200,36 @@ describe("CJK title matching", () => {
     ];
     const best = pickBestWork(works, 20, "量子计算前沿进展与应用");
     expect(best?.doi).toBe("10.9999/right");
+  });
+
+  it("does not accept OpenAlex-style minScore=0 without title match", () => {
+    const works = [
+      {
+        doi: "10.9999/wrong",
+        title: "Completely Unrelated Paper About Cats",
+        score: 9999,
+      },
+    ];
+    expect(pickBestWork(works, 0, "quantum thermometry living cell")).toBeNull();
+    expect(
+      pickBestWork(works, Number.MAX_SAFE_INTEGER, "quantum thermometry"),
+    ).toBeNull();
+  });
+
+  it("prefers title match not only at index 0", () => {
+    const works = [
+      { doi: "10.9999/a", title: "Unrelated First Hit", score: 100 },
+      {
+        doi: "10.9999/b",
+        title: "Nanometre-scale thermometry in a living cell",
+        score: 10,
+      },
+    ];
+    const best = pickBestWork(
+      works,
+      20,
+      "Nanometre-scale thermometry in a living cell",
+    );
+    expect(best?.doi).toBe("10.9999/b");
   });
 });

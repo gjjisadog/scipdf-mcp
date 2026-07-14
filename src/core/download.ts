@@ -11,7 +11,12 @@ import {
   looksLikeUrl,
   normalizeDoi,
 } from "./doi.js";
-import { getWorkByDoi, pickBestWork, searchByTitle } from "./crossref.js";
+import {
+  getWorkByDoi,
+  pickBestWork,
+  searchByTitle,
+  titlesMatch,
+} from "./crossref.js";
 import { searchOpenAlex } from "./openalex.js";
 import {
   citationToSearchQuery,
@@ -111,15 +116,20 @@ export async function resolveToDoi(
   let best = pickBestWork(crossref, 20, q);
   let source: ResolveResult["source"] = "crossref";
   let oa: Awaited<ReturnType<typeof searchOpenAlex>> = [];
-  let pool = crossref;
+  // Selection pool for ambiguity: same API source as `best` (not concatenated)
+  let selectPool = crossref;
 
   if (!best) {
     oa = await searchOpenAlex(q, timeoutMs);
-    pool = [...crossref, ...oa];
-    best = pickBestWork(oa, 0, q) ?? pickBestWork(pool, 0, q);
-    if (best && oa.some((w) => w.doi === best!.doi)) source = "openalex";
+    // OpenAlex scores ≠ Crossref; only accept title match (avoid wrong-paper downloads)
+    best = pickBestWork(oa, Number.MAX_SAFE_INTEGER, q);
+    if (best) {
+      source = "openalex";
+      selectPool = oa;
+    }
   }
 
+  const pool = [...crossref, ...oa];
   const oaDois = new Set(oa.map((w) => w.doi));
   const crossrefDois = new Set(crossref.map((w) => w.doi));
   const candidates = pool.slice(0, 5).map((w) => ({
@@ -154,22 +164,8 @@ export async function resolveToDoi(
     };
   }
 
-  // Ambiguous: top two very close scores and different DOIs — do not auto-pick
-  if (
-    pool.length >= 2 &&
-    pool[0].doi !== pool[1].doi &&
-    pool[0].score != null &&
-    pool[1].score != null &&
-    Math.abs(pool[0].score - pool[1].score) < 2 &&
-    !(
-      q &&
-      pool[0].title &&
-      normalizeTitleSafe(pool[0].title).includes(
-        normalizeTitleSafe(q).slice(0, 20),
-      ) &&
-      normalizeTitleSafe(q).length >= 2
-    )
-  ) {
+  // Ambiguous: within the same source, selected score is neck-and-neck with a rival
+  if (isAmbiguousSelection(selectPool, best, q)) {
     return {
       ok: false,
       query: q0,
@@ -193,13 +189,19 @@ export async function resolveToDoi(
   };
 }
 
-function normalizeTitleSafe(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize("NFKC")
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+/** Close score rivals in the same source list — skip when title clearly matches. */
+function isAmbiguousSelection(
+  works: Array<{ doi: string; title?: string; score?: number }>,
+  selected: { doi: string; title?: string; score?: number },
+  query: string,
+): boolean {
+  if (titlesMatch(query, selected.title)) return false;
+  if (selected.score == null) return false;
+  const rivals = works
+    .filter((w) => w.doi !== selected.doi && w.score != null)
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  if (rivals.length === 0) return false;
+  return Math.abs(selected.score - (rivals[0].score as number)) < 2;
 }
 
 export async function downloadPaper(
@@ -220,19 +222,6 @@ export async function downloadPaper(
         query,
         code: resolved.code ?? "DOI_NOT_FOUND",
         error: resolved.error,
-        candidates: resolved.candidates,
-      };
-    }
-
-    // Refuse silent download on ambiguity (even if a doi field were present)
-    if (resolved.code === "AMBIGUOUS_DOI") {
-      return {
-        ok: false,
-        query,
-        code: "AMBIGUOUS_DOI",
-        error:
-          resolved.error ??
-          "Ambiguous DOI match; confirm a candidate before downloading.",
         candidates: resolved.candidates,
       };
     }

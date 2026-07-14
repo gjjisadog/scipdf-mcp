@@ -84,11 +84,23 @@ export function buildPdfFilename(
       : "Unknown";
     const year = meta.year ? String(meta.year) : "n.d.";
     const title = meta.title
-      ? sanitizeFilenamePart(meta.title, 60)
-      : sanitizeFilenamePart(doi, 60);
-    return `${author}_${year}_${title}.pdf`;
+      ? sanitizeFilenamePart(meta.title, 50)
+      : sanitizeFilenamePart(doi, 50);
+    // DOI hash suffix prevents collisions overwriting different papers
+    const tag = doiPathTag(doi);
+    return `${author}_${year}_${title}_${tag}.pdf`;
   }
   return doiToFilename(doi);
+}
+
+/** Short stable tag from DOI so author_year_title paths stay unique. */
+function doiPathTag(doi: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < doi.length; i++) {
+    h ^= doi.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
 }
 
 /** Ensure resolved file path stays inside downloadDir */
@@ -153,30 +165,47 @@ export async function fileExists(path: string): Promise<boolean> {
 /** Minimum plausible PDF size (rejects truncated stubs that only have a header). */
 export const MIN_PDF_BYTES = 200;
 
-/** True if file exists and looks like a real PDF */
+/** %PDF- magic after optional leading whitespace/NUL (header region only). */
+export function hasPdfHeader(data: Uint8Array): boolean {
+  const limit = Math.min(1024, data.byteLength);
+  let i = 0;
+  while (i < limit) {
+    const b = data[i];
+    if (b === 0x20 || b === 0x09 || b === 0x0d || b === 0x0a || b === 0x00) {
+      i++;
+      continue;
+    }
+    break;
+  }
+  if (i + 5 > data.byteLength) return false;
+  return (
+    data[i] === 0x25 && // %
+    data[i + 1] === 0x50 && // P
+    data[i + 2] === 0x44 && // D
+    data[i + 3] === 0x46 && // F
+    data[i + 4] === 0x2d // -
+  );
+}
+
+/** True if file exists and looks like a real PDF (head + tail only; no full read). */
 export async function isValidPdfFile(path: string): Promise<boolean> {
   try {
     const st = await stat(path);
     if (!st.isFile() || st.size < MIN_PDF_BYTES) return false;
-    // Read head + tail only for large files
-    const head = await readFile(path, {
-      // full read for small files is fine; for large use open/read
-    });
-    // For very large PDFs avoid loading all into memory when checking cache
-    if (st.size > 2 * 1024 * 1024) {
-      const { open } = await import("node:fs/promises");
-      const fh = await open(path, "r");
-      try {
-        const headBuf = Buffer.alloc(1024);
-        const tailBuf = Buffer.alloc(2048);
-        await fh.read(headBuf, 0, 1024, 0);
-        await fh.read(tailBuf, 0, 2048, Math.max(0, st.size - 2048));
-        return isPdfBuffer(headBuf) && hasPdfEofMarker(tailBuf);
-      } finally {
-        await fh.close();
-      }
+    const { open } = await import("node:fs/promises");
+    const fh = await open(path, "r");
+    try {
+      const headLen = Math.min(1024, st.size);
+      const tailLen = Math.min(2048, st.size);
+      const headBuf = Buffer.alloc(headLen);
+      const tailBuf = Buffer.alloc(tailLen);
+      await fh.read(headBuf, 0, headLen, 0);
+      await fh.read(tailBuf, 0, tailLen, Math.max(0, st.size - tailLen));
+      // Do not call isPdfBuffer(head) — it requires %%EOF in the same buffer.
+      return hasPdfHeader(headBuf) && hasPdfEofMarker(tailBuf);
+    } finally {
+      await fh.close();
     }
-    return isPdfBuffer(head);
   } catch {
     return false;
   }
@@ -271,26 +300,7 @@ export async function savePdf(
  */
 export function isPdfBuffer(data: Uint8Array): boolean {
   if (data.byteLength < MIN_PDF_BYTES) return false;
-  const limit = Math.min(1024, data.byteLength);
-  let i = 0;
-  while (i < limit) {
-    const b = data[i];
-    // space, tab, CR, LF, NUL
-    if (b === 0x20 || b === 0x09 || b === 0x0d || b === 0x0a || b === 0x00) {
-      i++;
-      continue;
-    }
-    break;
-  }
-  if (i + 5 > data.byteLength) return false;
-  const headerOk =
-    data[i] === 0x25 && // %
-    data[i + 1] === 0x50 && // P
-    data[i + 2] === 0x44 && // D
-    data[i + 3] === 0x46 && // F
-    data[i + 4] === 0x2d; // -
-  if (!headerOk) return false;
-  // Prefer %%EOF in the last 2 KiB (rejects tiny header-only stubs)
+  if (!hasPdfHeader(data)) return false;
   const tail = data.subarray(Math.max(0, data.byteLength - 2048));
   return hasPdfEofMarker(tail);
 }

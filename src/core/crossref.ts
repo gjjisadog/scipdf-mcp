@@ -95,33 +95,41 @@ export function normalizeTitle(s: string): string {
     .trim();
 }
 
-/** Pick best Crossref hit for a title query */
+/** True when query and work title clearly match (substring either way). */
+export function titlesMatch(queryTitle: string, workTitle?: string): boolean {
+  if (!workTitle) return false;
+  const q = normalizeTitle(queryTitle);
+  const t = normalizeTitle(workTitle);
+  if (q.length < 2 || t.length < 2) return false;
+  return q === t || t.includes(q) || q.includes(t);
+}
+
+/**
+ * Pick best API hit for a title query.
+ * Prefers any title match in the list; otherwise top result if score >= minScore.
+ */
 export function pickBestWork(
   works: CrossrefWork[],
   minScore = 20,
   queryTitle?: string,
 ): CrossrefWork | null {
   if (works.length === 0) return null;
-  const best = works[0];
 
-  if (queryTitle && best.title) {
-    const q = normalizeTitle(queryTitle);
-    const t = normalizeTitle(best.title);
-    // Require meaningful length so empty-after-normalize never auto-matches.
-    if (
-      q.length >= 2 &&
-      t.length >= 2 &&
-      (q === t || t.includes(q) || q.includes(t))
-    ) {
-      return best;
+  // Prefer title match anywhere in results (not only index 0)
+  if (queryTitle) {
+    for (const w of works) {
+      if (titlesMatch(queryTitle, w.title)) return w;
     }
   }
 
+  const best = works[0];
   if (best.score !== undefined && best.score < minScore) return null;
   // Without a score or title match, only accept if score meets threshold
   // (undefined score + no title match → reject when minScore > 0)
   if (best.score === undefined && minScore > 0 && queryTitle) {
     return null;
   }
+  // minScore === 0 with a query and no title match used to auto-accept wrong OA hits
+  if (queryTitle && minScore <= 0) return null;
   return best;
 }
