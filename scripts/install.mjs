@@ -65,9 +65,17 @@ function which(bin) {
 }
 
 function ensureNode() {
-  const major = Number(process.versions.node.split(".")[0]);
-  if (major < 20) {
-    fail(`Node.js >= 20 required (found ${process.versions.node})`);
+  const parts = process.versions.node.split(".").map(Number);
+  const major = parts[0] ?? 0;
+  const minor = parts[1] ?? 0;
+  const patch = parts[2] ?? 0;
+  // Cheerio/Undici need >=20.18.1
+  const okVer =
+    major > 20 ||
+    (major === 20 && minor > 18) ||
+    (major === 20 && minor === 18 && patch >= 1);
+  if (!okVer) {
+    fail(`Node.js >= 20.18.1 required (found ${process.versions.node})`);
   }
   ok(`Node.js ${process.versions.node}`);
 }
@@ -108,6 +116,11 @@ function installSkill() {
   }
 }
 
+/** Absolute path to the current Node binary (GUI clients often lack PATH). */
+function nodeCommand() {
+  return process.execPath || "node";
+}
+
 function mcpServerBlock(entry) {
   const env = {
     SCIPDF_DOWNLOAD_DIR: DOWNLOAD_DIR,
@@ -116,7 +129,7 @@ function mcpServerBlock(entry) {
     env.SCIPDF_UNPAYWALL_EMAIL = UNPAYWALL_EMAIL;
   }
   return {
-    command: "node",
+    command: nodeCommand(),
     args: [entry],
     env,
   };
@@ -188,6 +201,31 @@ function registerClaudeAndCursor(entry) {
   }
 }
 
+/**
+ * Remove every existing scipdf MCP section from Grok config.toml.
+ * Previous regex stopped at the first `\n[` after the comment marker, which
+ * left the old `[mcp_servers.scipdf]` block and produced duplicate keys
+ * (invalid TOML / unparseable config on reinstall or --update).
+ */
+function stripScipdfTomlSections(text) {
+  let out = text;
+  // Marker + table (comment may be multi-line header)
+  out = out.replace(
+    /(?:^|\n)[ \t]*# --- scipdf-mcp[^\n]*\n\[mcp_servers\.scipdf\][\s\S]*?(?=\n\[|\s*$)/g,
+    "\n",
+  );
+  // Bare table without marker (repeat until gone)
+  let prev;
+  do {
+    prev = out;
+    out = out.replace(
+      /(?:^|\n)\[mcp_servers\.scipdf\][\s\S]*?(?=\n\[|\s*$)/g,
+      "\n",
+    );
+  } while (out !== prev);
+  return out.replace(/\n{3,}/g, "\n\n").trimEnd();
+}
+
 function registerGrokToml(entry) {
   const configPath = join(HOME, ".grok", "config.toml");
   mkdirSync(dirname(configPath), { recursive: true });
@@ -199,7 +237,7 @@ function registerGrokToml(entry) {
   const section = `
 # --- scipdf-mcp (auto-installed) ---
 [mcp_servers.scipdf]
-command = "node"
+command = ${JSON.stringify(nodeCommand())}
 args = [${JSON.stringify(entry)}]
 enabled = true
 startup_timeout_sec = 30
@@ -208,28 +246,10 @@ ${envToml}
 `;
 
   let text = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
-
-  if (/\[mcp_servers\.scipdf\]/.test(text)) {
-    // Replace existing section roughly
-    text = text.replace(
-      /# --- scipdf-mcp[\s\S]*?(?=\n\[|\n*$)/,
-      section.trim() + "\n",
-    );
-    // If marker missing but section exists, replace from [mcp_servers.scipdf] until next [
-    if (!text.includes("scipdf-mcp (auto-installed)")) {
-      text = text.replace(
-        /\[mcp_servers\.scipdf\][\s\S]*?(?=\n\[|\n*$)/,
-        section.trim() + "\n",
-      );
-    }
-    writeFileSync(configPath, text.endsWith("\n") ? text : text + "\n");
-    ok(`Updated Grok MCP in ${configPath}`);
-    return;
-  }
-
+  text = stripScipdfTomlSections(text);
   writeFileSync(
     configPath,
-    (text.trimEnd() ? text.trimEnd() + "\n" : "") + section,
+    (text ? text + "\n" : "") + section.trim() + "\n",
   );
   ok(`Registered Grok MCP in ${configPath}`);
 }
@@ -256,7 +276,7 @@ function selfTest(entry) {
     return;
   }
   log("Running self-test…");
-  const r = spawnSync("node", [entry, "version"], {
+  const r = spawnSync(nodeCommand(), [entry, "version"], {
     encoding: "utf8",
     cwd: ROOT,
   });

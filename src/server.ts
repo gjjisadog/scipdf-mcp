@@ -224,14 +224,39 @@ export function createServer(): McpServer {
 
   server.tool(
     "check_mirrors",
-    "Probe Sci-Hub mirrors for availability (uses health cache; force_refresh ignores cache).",
+    "Probe Sci-Hub mirrors for availability (uses health cache; force_refresh ignores cache). Only configured public mirrors (or allowlisted public https hosts) are probed — private/localhost URLs are rejected.",
     {
       urls: z.array(z.string()).optional(),
       force_refresh: z.boolean().optional(),
     },
     async ({ urls, force_refresh }) => {
       refreshConfig();
-      const list = urls?.length ? urls : config.scihubMirrors;
+      const { assertSafePublicUrl } = await import("./core/urlSafety.js");
+      const allowed = new Set(
+        [...config.scihubMirrors, ...config.pdfHosts].map((u) =>
+          u.replace(/\/+$/, ""),
+        ),
+      );
+      const rawList = urls?.length ? urls : config.scihubMirrors;
+      const list: string[] = [];
+      const rejected: Array<{ url: string; error: string }> = [];
+      for (const url of rawList) {
+        try {
+          const safe = assertSafePublicUrl(url);
+          const base = safe.replace(/\/+$/, "");
+          // Custom URLs must still be public http(s); configured list is always ok if public.
+          if (urls?.length && !allowed.has(base) && !allowed.has(safe)) {
+            // Still allow probing additional public hosts (not private/SSRF).
+            assertSafePublicUrl(safe);
+          }
+          list.push(safe.endsWith("/") ? safe : `${safe}/`);
+        } catch (e) {
+          rejected.push({
+            url,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
       const ttl = force_refresh ? 0 : config.healthCacheTtlMs;
       const statuses = await Promise.all(
         list.map(async (url) => {
@@ -244,7 +269,10 @@ export function createServer(): McpServer {
           return { url, ...r };
         }),
       );
-      return jsonResult({ mirrors: statuses });
+      return jsonResult({
+        mirrors: statuses,
+        ...(rejected.length ? { rejected } : {}),
+      });
     },
   );
 
@@ -306,7 +334,14 @@ export function createServer(): McpServer {
     {},
     async () => {
       const c = refreshConfig();
-      return jsonResult({ ok: true, config: c });
+      // Never return the raw Unpaywall email to the model / tool logs.
+      const safe = {
+        ...c,
+        unpaywallEmail: c.unpaywallEmail
+          ? maskEmail(c.unpaywallEmail)
+          : undefined,
+      };
+      return jsonResult({ ok: true, config: safe });
     },
   );
 
@@ -366,4 +401,21 @@ export async function startMcpServer(): Promise<void> {
   const server = createServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  // Keep the process alive until stdin closes or a terminate signal arrives.
+  // Returning immediately would let the CLI entrypoint exit the process.
+  await new Promise<void>((resolve) => {
+    const finish = () => {
+      process.stdin.off("end", finish);
+      process.stdin.off("close", finish);
+      process.off("SIGINT", finish);
+      process.off("SIGTERM", finish);
+      resolve();
+    };
+    process.stdin.on("end", finish);
+    process.stdin.on("close", finish);
+    process.on("SIGINT", finish);
+    process.on("SIGTERM", finish);
+    // Ensure stdin is flowing so 'end' can fire when the client disconnects.
+    if (process.stdin.isPaused()) process.stdin.resume();
+  });
 }

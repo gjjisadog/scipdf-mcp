@@ -25,7 +25,7 @@ import { SciPdfError, codeFromError } from "./errors.js";
 import {
   buildPdfPath,
   ensureDir,
-  isValidPdfFile,
+  isCacheHitForDoi,
   savePdf,
   writeManifest,
 } from "./storage.js";
@@ -110,21 +110,39 @@ export async function resolveToDoi(
   const crossref = await searchByTitle(q, timeoutMs);
   let best = pickBestWork(crossref, 20, q);
   let source: ResolveResult["source"] = "crossref";
+  let oa: Awaited<ReturnType<typeof searchOpenAlex>> = [];
   let pool = crossref;
 
   if (!best) {
-    const oa = await searchOpenAlex(q, timeoutMs);
+    oa = await searchOpenAlex(q, timeoutMs);
     pool = [...crossref, ...oa];
     best = pickBestWork(oa, 0, q) ?? pickBestWork(pool, 0, q);
     if (best && oa.some((w) => w.doi === best!.doi)) source = "openalex";
   }
 
+  const oaDois = new Set(oa.map((w) => w.doi));
+  const crossrefDois = new Set(crossref.map((w) => w.doi));
   const candidates = pool.slice(0, 5).map((w) => ({
     doi: w.doi,
     title: w.title,
     score: w.score,
-    source,
+    source: oaDois.has(w.doi)
+      ? crossrefDois.has(w.doi)
+        ? "crossref+openalex"
+        : "openalex"
+      : "crossref",
   }));
+
+  // Ensure the selected work appears in candidates (OpenAlex best may be beyond top 5 of pool)
+  if (best && !candidates.some((c) => c.doi === best!.doi)) {
+    candidates.unshift({
+      doi: best.doi,
+      title: best.title,
+      score: best.score,
+      source: oaDois.has(best.doi) ? "openalex" : "crossref",
+    });
+    if (candidates.length > 5) candidates.length = 5;
+  }
 
   if (!best) {
     return {
@@ -146,7 +164,10 @@ export async function resolveToDoi(
     !(
       q &&
       pool[0].title &&
-      pool[0].title.toLowerCase().includes(q.toLowerCase().slice(0, 20))
+      normalizeTitleSafe(pool[0].title).includes(
+        normalizeTitleSafe(q).slice(0, 20),
+      ) &&
+      normalizeTitleSafe(q).length >= 2
     )
   ) {
     return {
@@ -170,6 +191,15 @@ export async function resolveToDoi(
     source,
     candidates,
   };
+}
+
+function normalizeTitleSafe(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export async function downloadPaper(
@@ -233,8 +263,8 @@ export async function downloadPaper(
           })
         : undefined;
 
-    // Cache hit only if file exists AND is a real PDF (reject corrupt/HTML bait)
-    if (!options.force && (await isValidPdfFile(path))) {
+    // Cache hit only if file is a real PDF AND DOI matches (sidecar / encoded name)
+    if (!options.force && (await isCacheHitForDoi(path, doi))) {
       return {
         ok: true,
         query,
@@ -257,7 +287,7 @@ export async function downloadPaper(
     if (tryUnpaywall) {
       const oa = await fetchPdfViaUnpaywall(doi, config);
       if (oa) {
-        const bytes = await savePdf(path, oa.pdfBytes);
+        const bytes = await savePdf(path, oa.pdfBytes, doi);
         return {
           ok: true,
           query,
@@ -285,7 +315,7 @@ export async function downloadPaper(
 
     if (config.allowScihub) {
       const { pdfBytes, mirror } = await fetchPdfViaSciHub(doi, config);
-      const bytes = await savePdf(path, pdfBytes);
+      const bytes = await savePdf(path, pdfBytes, doi);
       return {
         ok: true,
         query,
@@ -340,7 +370,11 @@ async function mapPool<T, R>(
       results[i] = await fn(items[i], i);
     }
   }
-  const n = Math.min(concurrency, Math.max(items.length, 1));
+  // concurrency may arrive as float; floor and clamp so we never spawn 0 workers
+  const n = Math.max(
+    1,
+    Math.min(Math.floor(Number(concurrency) || 1), Math.max(items.length, 1)),
+  );
   await Promise.all(Array.from({ length: n }, () => worker()));
   return results;
 }

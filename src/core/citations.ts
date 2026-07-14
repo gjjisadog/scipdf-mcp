@@ -12,8 +12,8 @@ export function extractQueriesFromText(text: string): string[] {
     out.push(t);
   };
 
-  // BibTeX doi fields
-  for (const m of text.matchAll(/doi\s*=\s*[{"]([^}"\s]+)[}"]/gi)) {
+  // BibTeX doi fields (suffix may contain < > for SICI)
+  for (const m of text.matchAll(/doi\s*=\s*[{"]([^}"\n]+)[}"]/gi)) {
     const d = normalizeDoi(m[1]);
     if (d) add(d);
   }
@@ -24,29 +24,50 @@ export function extractQueriesFromText(text: string): string[] {
     if (d) add(d);
   }
 
-  // All bare DOIs in text
-  for (const m of text.matchAll(/\b10\.\d{4,9}\/[^\s\]}>"',;]+/gi)) {
+  // All bare DOIs in text (allow <> in SICI)
+  for (const m of text.matchAll(/\b10\.\d{4,9}\/[^\s\]}"']+/gi)) {
     const d = normalizeDoi(m[0]);
     if (d) add(d);
   }
 
+  // BibTeX entries without DOI → use title as query
+  for (const block of text.matchAll(/@\w+\s*\{[^,]+,([\s\S]*?)\n\s*\}/g)) {
+    const body = block[1];
+    if (/doi\s*=/i.test(body)) continue;
+    const titleM = body.match(
+      /title\s*=\s*(?:\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}|"([^"]+)")/i,
+    );
+    const title = (titleM?.[1] ?? titleM?.[2] ?? "").trim();
+    if (title.length >= 8) add(title);
+  }
+
+  // RIS records without DO → use TI title
+  const risRecords = text.split(/(?=^TY\s+-\s+)/m);
+  for (const rec of risRecords) {
+    if (!/^TY\s+-/m.test(rec)) continue;
+    if (/^DO\s+-/m.test(rec)) continue;
+    const ti = rec.match(/^TI\s+-\s+(.+)$/m)?.[1]?.trim();
+    if (ti && ti.length >= 8) add(ti);
+  }
+
   // Always also collect citation-like lines WITHOUT a DOI
-  // (previously skipped entirely when any DOI was found — dropped mixed lists)
   for (const line of text.split(/\n+/)) {
     const L = line.trim();
     if (L.length < 12) continue;
-    if (/^(author|title|journal|year|volume|@|TY\s+-|ER\s+-|DO\s+-)/i.test(L)) {
+    if (/^(author|title|journal|year|volume|@|TY\s+-|ER\s+-|DO\s+-|TI\s+-|AU\s+-)/i.test(L)) {
       continue;
     }
     // Skip lines that are only a DOI (already added)
     if (normalizeDoi(L) && L.replace(/\s/g, "") === normalizeDoi(L)) continue;
-    if (extractDoiFromText(L) && !looksLikeCitation(L.replace(/\b10\.\d{4,9}\/[^\s]+/gi, "").trim())) {
+    if (
+      extractDoiFromText(L) &&
+      !looksLikeCitation(L.replace(/\b10\.\d{4,9}\/\S+/gi, "").trim())
+    ) {
       // Line is DOI-heavy with little citation text — skip as separate query
       if (L.length < 40) continue;
     }
     // author year title-ish lines without requiring empty DOI list
-    if (/\b(19|20)\d{2}\b/.test(L) && /[A-Za-z\u4e00-\u9fff]{3,}/.test(L)) {
-      // Prefer DOI if present on the same line
+    if (/\b(19|20)\d{2}\b/.test(L) && /[\p{L}]{3,}/u.test(L)) {
       const d = extractDoiFromText(L);
       if (d) {
         add(d);
@@ -78,10 +99,11 @@ export function looksLikeCitation(s: string): boolean {
   const t = s.trim();
   if (!t) return false;
   if (extractDoiFromText(t) && t.length < 40) return false;
-  // author et al year / 作者 (2020)
-  if (/\bet\s+al\.?\b/i.test(t) && /\b(19|20)\d{2}\b/.test(t)) return true;
-  if (/[A-Z][a-z]+,\s*[A-Z]/.test(t) && /\b(19|20)\d{2}\b/.test(t)) return true;
-  if (/[\u4e00-\u9fff].*[（(]?(19|20)\d{2}[）)]?/.test(t)) return true;
-  if ((t.match(/\./g) || []).length >= 2 && /\b(19|20)\d{2}\b/.test(t)) return true;
+  // year + author-ish
+  if (/\b(19|20)\d{2}\b/.test(t) && /[A-Za-z\u4e00-\u9fff]{2,}/.test(t)) {
+    return true;
+  }
+  if (/et\s+al/i.test(t) || /\(\d{4}\)/.test(t)) return true;
+  if (t.includes(",") && t.length > 30 && /\b(19|20)\d{2}\b/.test(t)) return true;
   return false;
 }

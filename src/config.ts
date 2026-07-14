@@ -55,8 +55,17 @@ function loadConfigFile(): Partial<SciPdfConfig> & Record<string, unknown> {
     if (!existsSync(abs)) continue;
     try {
       return JSON.parse(readFileSync(abs, "utf-8")) as Partial<SciPdfConfig>;
-    } catch {
-      // ignore
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Explicit SCIPDF_CONFIG must not silently fall back (would reset allowScihub etc.)
+      if (process.env.SCIPDF_CONFIG && abs === resolve(expandHome(process.env.SCIPDF_CONFIG))) {
+        throw new Error(`Failed to parse SCIPDF_CONFIG at ${abs}: ${msg}`);
+      }
+      console.error(
+        `[scipdf] warning: ignoring invalid config JSON at ${abs}: ${msg}`,
+      );
+      // try next candidate instead of silently using defaults while a broken file exists
+      continue;
     }
   }
   return {};
@@ -133,10 +142,11 @@ export function loadConfig(): SciPdfConfig {
       Number.isFinite(fastFailTimeoutMs) && fastFailTimeoutMs > 0
         ? fastFailTimeoutMs
         : 8_000,
-    concurrency:
-      Number.isFinite(concurrency) && concurrency > 0
-        ? Math.min(concurrency, 8)
-        : 2,
+    concurrency: (() => {
+      // Reject fractions like 0.5 that used to create zero workers in mapPool
+      if (!Number.isFinite(concurrency) || concurrency < 1) return 2;
+      return Math.min(Math.floor(concurrency), 8);
+    })(),
     userAgent: process.env.SCIPDF_USER_AGENT ?? (file.userAgent as string) ?? DEFAULT_UA,
     filenameStyle:
       filenameStyle === "author_year_title" ? "author_year_title" : "doi",

@@ -81,10 +81,16 @@ export async function searchByTitle(
   }
 }
 
-function normalizeTitle(s: string): string {
+/**
+ * Normalize titles for comparison. Keeps all Unicode letters/numbers
+ * (CJK included). Stripping non-ASCII used to collapse Chinese titles to ""
+ * so that includes("") always matched and silently accepted wrong DOIs.
+ */
+export function normalizeTitle(s: string): string {
   return s
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -101,11 +107,21 @@ export function pickBestWork(
   if (queryTitle && best.title) {
     const q = normalizeTitle(queryTitle);
     const t = normalizeTitle(best.title);
-    if (q === t || t.includes(q) || q.includes(t)) {
+    // Require meaningful length so empty-after-normalize never auto-matches.
+    if (
+      q.length >= 2 &&
+      t.length >= 2 &&
+      (q === t || t.includes(q) || q.includes(t))
+    ) {
       return best;
     }
   }
 
   if (best.score !== undefined && best.score < minScore) return null;
+  // Without a score or title match, only accept if score meets threshold
+  // (undefined score + no title match → reject when minScore > 0)
+  if (best.score === undefined && minScore > 0 && queryTitle) {
+    return null;
+  }
   return best;
 }

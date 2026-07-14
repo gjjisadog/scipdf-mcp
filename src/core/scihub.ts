@@ -1,11 +1,12 @@
 import * as cheerio from "cheerio";
 import type { SciPdfConfig } from "../types.js";
-import { SciPdfError } from "./errors.js";
+import { SciPdfError, aggregateSourceErrors } from "./errors.js";
 import { getHealth, markBad, markGood, sortByHealth } from "./health.js";
 import { throttle } from "./rateLimit.js";
 import { debugLog } from "./debug.js";
 import { isPdfBuffer } from "./storage.js";
 import { contentTypeIsPdf, fetchBuffer, fetchText } from "./http.js";
+import { assertSafePublicUrl } from "./urlSafety.js";
 
 const PDF_NOT_AVAILABLE = [
   /Please try to search again using DOI/im,
@@ -138,7 +139,7 @@ async function downloadPdfBytes(
   referer: string,
 ): Promise<Uint8Array> {
   await throttle(config.minRequestGapMs);
-  const url = cleanPdfUrl(pdfUrl);
+  const url = assertSafePublicUrl(cleanPdfUrl(pdfUrl));
   const start = Date.now();
   const { response: res, buffer: buf } = await fetchBuffer(
     url,
@@ -175,8 +176,8 @@ export async function fetchFromMirror(
   doi: string,
   config: SciPdfConfig,
 ): Promise<SciHubFetchOk> {
-  const base = normalizeMirror(mirror);
-  const pageUrl = buildSciHubUrl(mirror, doi);
+  const base = normalizeMirror(assertSafePublicUrl(mirror));
+  const pageUrl = buildSciHubUrl(base, doi);
   await throttle(config.minRequestGapMs);
   const start = Date.now();
   const timeout = Math.min(config.timeoutMs, config.fastFailTimeoutMs + 5000);
@@ -238,7 +239,8 @@ export async function fetchFromPdfHost(
   doi: string,
   config: SciPdfConfig,
 ): Promise<SciHubFetchOk> {
-  const base = hostBase.endsWith("/") ? hostBase : `${hostBase}/`;
+  const safe = assertSafePublicUrl(hostBase);
+  const base = safe.endsWith("/") ? safe : `${safe}/`;
   // Support templates that are full mirror roots vs .../pdf/
   let pdfUrl: string;
   if (base.includes("/pdf")) {
@@ -316,8 +318,9 @@ export async function fetchPdfViaSciHub(
     throw lastNotFound;
   }
 
+  const code = aggregateSourceErrors(errors);
   throw new SciPdfError(
-    "ALL_SOURCES_FAILED",
+    code,
     `All Sci-Hub sources failed for ${doi}:\n${errors.join("\n")}`,
   );
 }
@@ -328,7 +331,16 @@ export async function checkMirror(
   userAgent?: string,
   ttlMs = 15 * 60_000,
 ): Promise<{ ok: boolean; latencyMs: number; error?: string; cached?: boolean }> {
-  const url = normalizeMirror(mirror);
+  let url: string;
+  try {
+    url = normalizeMirror(assertSafePublicUrl(mirror));
+  } catch (e) {
+    return {
+      ok: false,
+      latencyMs: 0,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
   const cached = getHealth(url, ttlMs);
   if (cached) {
     return {

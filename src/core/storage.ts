@@ -6,6 +6,8 @@ import {
   constants,
   readdir,
   stat,
+  rename,
+  unlink,
 } from "node:fs/promises";
 import {
   dirname,
@@ -16,8 +18,13 @@ import {
   isAbsolute,
   sep,
 } from "node:path";
-import { doiToFilename } from "./doi.js";
+import { doiToFilename, filenameToDoiHint, normalizeDoi } from "./doi.js";
 import type { FilenameStyle } from "../types.js";
+
+/** Sidecar JSON next to PDF: { doi, savedAt } — prevents wrong-DOI cache hits. */
+export function metaPathForPdf(pdfPath: string): string {
+  return `${pdfPath}.scipdf.json`;
+}
 
 export async function ensureDir(dir: string): Promise<string> {
   const abs = resolve(dir);
@@ -143,31 +150,127 @@ export async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+/** Minimum plausible PDF size (rejects truncated stubs that only have a header). */
+export const MIN_PDF_BYTES = 200;
+
 /** True if file exists and looks like a real PDF */
 export async function isValidPdfFile(path: string): Promise<boolean> {
   try {
-    const buf = await readFile(path);
-    return isPdfBuffer(buf);
+    const st = await stat(path);
+    if (!st.isFile() || st.size < MIN_PDF_BYTES) return false;
+    // Read head + tail only for large files
+    const head = await readFile(path, {
+      // full read for small files is fine; for large use open/read
+    });
+    // For very large PDFs avoid loading all into memory when checking cache
+    if (st.size > 2 * 1024 * 1024) {
+      const { open } = await import("node:fs/promises");
+      const fh = await open(path, "r");
+      try {
+        const headBuf = Buffer.alloc(1024);
+        const tailBuf = Buffer.alloc(2048);
+        await fh.read(headBuf, 0, 1024, 0);
+        await fh.read(tailBuf, 0, 2048, Math.max(0, st.size - 2048));
+        return isPdfBuffer(headBuf) && hasPdfEofMarker(tailBuf);
+      } finally {
+        await fh.close();
+      }
+    }
+    return isPdfBuffer(head);
   } catch {
     return false;
   }
 }
 
+export interface PdfCacheMeta {
+  doi: string;
+  savedAt: string;
+}
+
+export async function writePdfMeta(
+  pdfPath: string,
+  doi: string,
+): Promise<void> {
+  const meta: PdfCacheMeta = {
+    doi: normalizeDoi(doi) ?? doi,
+    savedAt: new Date().toISOString(),
+  };
+  await writeFile(metaPathForPdf(pdfPath), JSON.stringify(meta) + "\n", "utf8");
+}
+
+export async function readPdfMeta(
+  pdfPath: string,
+): Promise<PdfCacheMeta | null> {
+  try {
+    const raw = await readFile(metaPathForPdf(pdfPath), "utf8");
+    const j = JSON.parse(raw) as PdfCacheMeta;
+    if (j && typeof j.doi === "string" && j.doi) return j;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cache hit only when file is a valid PDF AND DOI matches.
+ * Prevents returning paper A when paper B maps to the same path.
+ */
+export async function isCacheHitForDoi(
+  path: string,
+  doi: string,
+): Promise<boolean> {
+  if (!(await isValidPdfFile(path))) return false;
+  const want = (normalizeDoi(doi) ?? doi).toLowerCase();
+  const meta = await readPdfMeta(path);
+  if (meta?.doi) {
+    return (normalizeDoi(meta.doi) ?? meta.doi).toLowerCase() === want;
+  }
+  // Legacy files without sidecar: accept only if filename uniquely encodes this DOI
+  const hint = filenameToDoiHint(basename(path));
+  if (hint && hint.toLowerCase() === want) return true;
+  // Ambiguous / legacy flat names (e.g. old 10.1000_a_b.pdf) — force re-download
+  return false;
+}
+
+/** Atomic write: temp file then rename so crashes never leave half PDFs as cache. */
 export async function savePdf(
   path: string,
   data: Uint8Array,
+  doi?: string,
 ): Promise<number> {
+  if (!isPdfBuffer(data)) {
+    throw new Error("Refusing to save: buffer is not a valid PDF");
+  }
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, data);
+  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    await writeFile(tmp, data);
+    await rename(tmp, path);
+  } catch (e) {
+    try {
+      await unlink(tmp);
+    } catch {
+      /* ignore */
+    }
+    throw e;
+  }
+  if (doi) {
+    try {
+      await writePdfMeta(path, doi);
+    } catch {
+      // meta is best-effort; PDF itself is already saved
+    }
+  }
   return data.byteLength;
 }
 
 /**
  * PDF magic: after optional leading whitespace/NUL, must start with %PDF-
  * (not merely contain "%PDF" somewhere in the first KiB — that accepts HTML bait).
+ * Also requires a minimum size and a %%EOF marker in the buffer tail when possible.
  */
 export function isPdfBuffer(data: Uint8Array): boolean {
-  if (data.byteLength < 5) return false;
+  if (data.byteLength < MIN_PDF_BYTES) return false;
   const limit = Math.min(1024, data.byteLength);
   let i = 0;
   while (i < limit) {
@@ -180,13 +283,22 @@ export function isPdfBuffer(data: Uint8Array): boolean {
     break;
   }
   if (i + 5 > data.byteLength) return false;
-  return (
+  const headerOk =
     data[i] === 0x25 && // %
     data[i + 1] === 0x50 && // P
     data[i + 2] === 0x44 && // D
     data[i + 3] === 0x46 && // F
-    data[i + 4] === 0x2d // -
-  );
+    data[i + 4] === 0x2d; // -
+  if (!headerOk) return false;
+  // Prefer %%EOF in the last 2 KiB (rejects tiny header-only stubs)
+  const tail = data.subarray(Math.max(0, data.byteLength - 2048));
+  return hasPdfEofMarker(tail);
+}
+
+function hasPdfEofMarker(tail: Uint8Array): boolean {
+  // Search for %%EOF
+  const t = Buffer.from(tail).toString("latin1");
+  return t.includes("%%EOF");
 }
 
 export interface PaperFileInfo {
