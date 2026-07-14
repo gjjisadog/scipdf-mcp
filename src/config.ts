@@ -109,6 +109,14 @@ export function loadConfig(): SciPdfConfig {
   const minRequestGapMs = Number(
     process.env.SCIPDF_MIN_GAP_MS ?? file.minRequestGapMs ?? 200,
   );
+  const sourceRaceWidth = Number(
+    process.env.SCIPDF_RACE_WIDTH ?? file.sourceRaceWidth ?? 5,
+  );
+  const pdfNotFoundConfirmations = Number(
+    process.env.SCIPDF_NOT_FOUND_CONFIRM ??
+      file.pdfNotFoundConfirmations ??
+      1,
+  );
 
   const filenameStyle = (process.env.SCIPDF_FILENAME_STYLE ??
     file.filenameStyle ??
@@ -158,6 +166,21 @@ export function loadConfig(): SciPdfConfig {
       Number.isFinite(minRequestGapMs) && minRequestGapMs >= 0
         ? minRequestGapMs
         : 200,
+    sourceRaceWidth: (() => {
+      // Aggressive default: probe several hosts/mirrors at once
+      if (!Number.isFinite(sourceRaceWidth) || sourceRaceWidth < 1) return 5;
+      return Math.min(Math.floor(sourceRaceWidth), 8);
+    })(),
+    pdfNotFoundConfirmations: (() => {
+      // Sci-Hub mirrors share one DB; one solid "not in DB" is enough to bail
+      if (
+        !Number.isFinite(pdfNotFoundConfirmations) ||
+        pdfNotFoundConfirmations < 1
+      ) {
+        return 1;
+      }
+      return Math.min(Math.floor(pdfNotFoundConfirmations), 10);
+    })(),
     debug: process.env.SCIPDF_DEBUG === "1" || Boolean(file.debug),
     unpaywallEmail,
     preferOa,

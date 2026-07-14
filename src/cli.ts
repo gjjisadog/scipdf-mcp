@@ -5,7 +5,14 @@ import {
   resolveToDoi,
   extractQueriesFromText,
 } from "./core/download.js";
+import { parseBatchArgs, parseDownloadArgs } from "./core/cliArgs.js";
 import { checkMirror } from "./core/scihub.js";
+import {
+  flushHealth,
+  healthFilePath,
+  listHealth,
+  sortByHealth,
+} from "./core/health.js";
 import { listPaperFiles } from "./core/storage.js";
 import { openPath } from "./core/open.js";
 import { readFileSync } from "node:fs";
@@ -34,20 +41,33 @@ Usage:
   scipdf-mcp download <query>    Download one paper (DOI/title/URL)
   scipdf-mcp download --title "..." 
   scipdf-mcp download --force <doi>
+  scipdf-mcp download --outdir ~/Papers <doi>
   scipdf-mcp resolve <query>     Resolve DOI only
   scipdf-mcp batch <q1> <q2>...  Batch download
+  scipdf-mcp batch --outdir DIR --force <q1> <q2>
   scipdf-mcp parse <file|->      Extract DOIs from bib/ris/text file (or stdin)
   scipdf-mcp list                List downloaded PDFs
-  scipdf-mcp check-mirrors       Probe mirrors
+  scipdf-mcp check-mirrors       Probe mirrors (+ pdfHosts), persist health rank
   scipdf-mcp unpaywall <doi>     Lookup Unpaywall OA (needs email)
   scipdf-mcp open <path>         Open PDF in system viewer
   scipdf-mcp version
 
+Download flags:
+  --force / -f           Re-download even if cached
+  --outdir / -o <dir>    Output directory
+  --filename <name>      Output filename
+  --title | --doi | --url <q>   Force query type
+  --query / -q <q>       Explicit query token
+
 Env:
   SCIPDF_DOWNLOAD_DIR      Default ~/Documents/Papers
   SCIPDF_UNPAYWALL_EMAIL   Optional real email (Unpaywall API)
-  SCIPDF_PREFER_OA         true to try OA before Sci-Hub (default false)
+  SCIPDF_PREFER_OA         true → OA-first (Unpaywall + free OA APIs), then Sci-Hub
   SCIPDF_ALLOW_SCIHUB      true/false, default true (main path)
+  SCIPDF_RACE_WIDTH        Parallel source probes (default 5)
+  SCIPDF_NOT_FOUND_CONFIRM Early-stop confirmations (default 1)
+  SCIPDF_HEALTH_FILE       Override health cache path
+  SCIPDF_HEALTH_PERSIST=0  Disable health disk cache
   SCIPDF_DEBUG=1           Verbose logs
   SCIPDF_FILENAME_STYLE    doi | author_year_title
 `);
@@ -56,7 +76,6 @@ Env:
 export async function runCli(argv: string[]): Promise<number> {
   const args = argv.slice(2);
   if (args.length === 0) {
-    // MCP mode
     const { startMcpServer } = await import("./server.js");
     await startMcpServer();
     return 0;
@@ -76,26 +95,30 @@ export async function runCli(argv: string[]): Promise<number> {
   }
 
   if (cmd === "download") {
-    let force = false;
-    let queryType: "auto" | "title" | "doi" | "url" = "auto";
-    const parts: string[] = [];
-    for (let i = 0; i < rest.length; i++) {
-      if (rest[i] === "--force") force = true;
-      else if (rest[i] === "--title") {
-        queryType = "title";
-        if (rest[i + 1]) parts.push(rest[++i]);
-      } else if (rest[i] === "--doi") {
-        queryType = "doi";
-        if (rest[i + 1]) parts.push(rest[++i]);
-      } else parts.push(rest[i]);
+    let parsed;
+    try {
+      parsed = parseDownloadArgs(rest);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e));
+      console.error(
+        "Usage: scipdf-mcp download [--force] [--outdir DIR] <doi|title|url>",
+      );
+      return 1;
     }
-    const query = parts.join(" ").trim();
-    if (!query) {
-      console.error("Usage: scipdf-mcp download <doi|title|url>");
+    if (!parsed.query) {
+      console.error(
+        "Usage: scipdf-mcp download [--force] [--outdir DIR] <doi|title|url>",
+      );
       return 1;
     }
     const result = await downloadPaper(
-      { query, queryType, force },
+      {
+        query: parsed.query,
+        queryType: parsed.queryType,
+        force: parsed.force,
+        outdir: parsed.outdir,
+        filename: parsed.filename,
+      },
       config,
     );
     console.log(JSON.stringify(result, null, 2));
@@ -114,13 +137,25 @@ export async function runCli(argv: string[]): Promise<number> {
   }
 
   if (cmd === "batch") {
-    if (rest.length === 0) {
-      console.error("Usage: scipdf-mcp batch <q1> [q2...]");
+    let parsed;
+    try {
+      parsed = parseBatchArgs(rest);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e));
       return 1;
     }
-    const result = await downloadPapers(rest, config, { writeManifest: true });
+    if (parsed.queries.length === 0) {
+      console.error(
+        "Usage: scipdf-mcp batch [--force] [--outdir DIR] <q1> [q2...]",
+      );
+      return 1;
+    }
+    const result = await downloadPapers(parsed.queries, config, {
+      writeManifest: true,
+      force: parsed.force,
+      outdir: parsed.outdir,
+    });
     console.log(JSON.stringify(result, null, 2));
-    // Empty after dedupe/trim is a failure (e.g. batch '   ')
     if (result.total === 0) return 1;
     return result.failed === 0 ? 0 : 1;
   }
@@ -151,18 +186,58 @@ export async function runCli(argv: string[]): Promise<number> {
   }
 
   if (cmd === "check-mirrors") {
-    const statuses = await Promise.all(
-      config.scihubMirrors.map(async (url) => ({
-        url,
-        ...(await checkMirror(
-          url,
-          12_000,
-          config.userAgent,
-          0,
-        )),
-      })),
+    const forceRefresh = rest.includes("--force") || rest.includes("-f");
+    const ttl = forceRefresh ? 0 : config.healthCacheTtlMs;
+
+    const probe = async (url: string) => ({
+      url,
+      ...(await checkMirror(url, 12_000, config.userAgent, ttl)),
+    });
+
+    const [mirrorStatuses, hostStatuses] = await Promise.all([
+      Promise.all(config.scihubMirrors.map(probe)),
+      Promise.all((config.pdfHosts ?? []).map(probe)),
+    ]);
+
+    // Persist ranking snapshot
+    flushHealth();
+
+    const recommendedMirrors = sortByHealth(
+      config.scihubMirrors,
+      config.healthCacheTtlMs,
     );
-    console.log(JSON.stringify({ mirrors: statuses }, null, 2));
+    const recommendedHosts = sortByHealth(
+      config.pdfHosts ?? [],
+      config.healthCacheTtlMs,
+    );
+    const demoted = listHealth(config.healthCacheTtlMs).filter(
+      (h) => !h.ok && (h.failStreak ?? 0) >= 2,
+    );
+
+    console.log(
+      JSON.stringify(
+        {
+          mirrors: mirrorStatuses,
+          pdfHosts: hostStatuses,
+          recommendedOrder: {
+            pdfHosts: recommendedHosts,
+            scihubMirrors: recommendedMirrors,
+          },
+          demoted: demoted.map((d) => ({
+            url: d.url,
+            failStreak: d.failStreak,
+            error: d.error,
+            latencyMs: d.latencyMs,
+          })),
+          healthFile:
+            process.env.SCIPDF_HEALTH_PERSIST === "0"
+              ? null
+              : healthFilePath(),
+        },
+        null,
+        2,
+      ),
+    );
     return 0;
   }
 

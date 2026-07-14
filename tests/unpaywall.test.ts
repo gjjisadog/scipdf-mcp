@@ -14,6 +14,8 @@ function baseConfig(over: Partial<SciPdfConfig> = {}): SciPdfConfig {
     filenameStyle: "doi",
     healthCacheTtlMs: 1000,
     minRequestGapMs: 0,
+    sourceRaceWidth: 5,
+    pdfNotFoundConfirmations: 1,
     debug: false,
     preferOa: true,
     allowScihub: true,

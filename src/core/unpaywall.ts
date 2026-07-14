@@ -72,8 +72,8 @@ export async function lookupUnpaywall(
     return null;
   }
 
-  await throttle(config.minRequestGapMs);
   const url = `${API}/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`;
+  await throttle(config.minRequestGapMs, url);
 
   try {
     const { response: res, data } = await fetchJson<UnpaywallResponse>(
@@ -144,8 +144,8 @@ export async function downloadOaPdf(
   pdfUrl: string,
   config: SciPdfConfig,
 ): Promise<Uint8Array> {
-  await throttle(config.minRequestGapMs);
   const url = assertSafePublicUrl(pdfUrl);
+  await throttle(config.minRequestGapMs, url);
   const { response: res, buffer: buf } = await fetchBuffer(
     url,
     {

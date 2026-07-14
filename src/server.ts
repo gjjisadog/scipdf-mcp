@@ -69,7 +69,7 @@ export function createServer(): McpServer {
 
   server.tool(
     "download_paper",
-    "Download an academic paper PDF by DOI, title, URL, or citation. Default: Sci-Hub/pdfHosts. Optional Unpaywall OA only if SCIPDF_UNPAYWALL_EMAIL is set AND SCIPDF_PREFER_OA=true. Returns path, source (scihub|unpaywall|cache), citations. Use force=true to re-download.",
+    "Download an academic paper PDF by DOI, title, URL, or citation. Default: Sci-Hub/pdfHosts. Optional OA-first when SCIPDF_PREFER_OA=true (Unpaywall if email set + OpenAlex/EuropePMC/Semantic Scholar). Returns path, source, citations, failure summary on error. Use force=true to re-download.",
     {
 
       query: z
@@ -177,6 +177,8 @@ export function createServer(): McpServer {
         filenameStyle: config.filenameStyle,
         timeoutMs: config.timeoutMs,
         concurrency: config.concurrency,
+        sourceRaceWidth: config.sourceRaceWidth,
+        pdfNotFoundConfirmations: config.pdfNotFoundConfirmations,
         healthCacheTtlMs: config.healthCacheTtlMs,
         unpaywall: {
           configured: hasUnpaywallEmail(config),
@@ -185,11 +187,13 @@ export function createServer(): McpServer {
             : null,
           preferOa: config.preferOa,
           allowScihub: config.allowScihub,
-          active: hasUnpaywallEmail(config) && config.preferOa,
-          hint:
-            hasUnpaywallEmail(config) && config.preferOa
-              ? "OA-first, then Sci-Hub"
-              : "Default is Sci-Hub. Optional OA: set SCIPDF_UNPAYWALL_EMAIL + SCIPDF_PREFER_OA=true",
+          active: config.preferOa,
+          freeOaProviders: ["openalex", "europepmc", "semanticscholar"],
+          hint: config.preferOa
+            ? hasUnpaywallEmail(config)
+              ? "OA-first: Unpaywall + free OA APIs, then Sci-Hub"
+              : "OA-first: free OA APIs (no Unpaywall email), then Sci-Hub"
+            : "Default is Sci-Hub. Optional OA: SCIPDF_PREFER_OA=true (+ email for Unpaywall)",
         },
       });
     },

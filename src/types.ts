@@ -13,6 +13,18 @@ export type ErrorCode =
   | "IO_ERROR"
   | "UNKNOWN";
 
+/** Compact multi-source failure breakdown for agents / CLI. */
+export interface SourceFailureSummary {
+  attempted: number;
+  absent: number;
+  blocked: number;
+  timeouts: number;
+  other: number;
+  earlyStop?: boolean;
+  /** First few raw `host: message` lines */
+  samples: string[];
+}
+
 export interface SciPdfConfig {
   downloadDir: string;
   scihubMirrors: string[];
@@ -28,6 +40,17 @@ export interface SciPdfConfig {
   healthCacheTtlMs: number;
   /** Global rate limit: min gap between outbound requests (ms) */
   minRequestGapMs: number;
+  /**
+   * How many sources (pdfHosts / mirrors) to probe in parallel.
+   * Default 5 (aggressive). Env: SCIPDF_RACE_WIDTH
+   */
+  sourceRaceWidth: number;
+  /**
+   * Stop after this many independent "PDF not in Sci-Hub DB" confirmations
+   * instead of draining every mirror. Default 1 (mirrors share one DB).
+   * Env: SCIPDF_NOT_FOUND_CONFIRM
+   */
+  pdfNotFoundConfirmations: number;
   debug: boolean;
   /**
    * Optional. Unpaywall only runs when this is set AND preferOa is true.
@@ -55,10 +78,17 @@ export interface DownloadResult {
   authors?: string[];
   year?: number;
   path?: string;
-  source?: "scihub" | "unpaywall" | "cache";
+  source?:
+    | "scihub"
+    | "unpaywall"
+    | "openalex"
+    | "europepmc"
+    | "semanticscholar"
+    | "cache";
   mirror?: string;
-  /** OA license / version hint when source is unpaywall */
+  /** OA license / version hint when source is an OA provider */
   oa?: {
+    provider?: string;
     hostType?: string;
     version?: string;
     license?: string;
@@ -69,6 +99,8 @@ export interface DownloadResult {
   cached?: boolean;
   code?: ErrorCode;
   error?: string;
+  /** Structured multi-source failure stats (when download fails) */
+  failure?: SourceFailureSummary;
   candidates?: Array<{ doi: string; title?: string; score?: number }>;
   citation?: {
     apa?: string;

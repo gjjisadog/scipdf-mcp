@@ -4,6 +4,7 @@ import type {
   QueryType,
   BatchDownloadResult,
   ResolveResult,
+  SourceFailureSummary,
 } from "../types.js";
 import {
   extractDoiFromText,
@@ -25,8 +26,9 @@ import {
 } from "./citations.js";
 import { buildCitations } from "./citeFormat.js";
 import { fetchPdfViaSciHub } from "./scihub.js";
-import { fetchPdfViaUnpaywall, hasUnpaywallEmail } from "./unpaywall.js";
+import { fetchPdfViaOa } from "./oa.js";
 import { SciPdfError, codeFromError } from "./errors.js";
+import { failureFromCaught } from "./failureSummary.js";
 import {
   buildPdfPath,
   ensureDir,
@@ -111,17 +113,18 @@ export async function resolveToDoi(
     };
   }
 
-  // title / citation search: Crossref then OpenAlex
-  const crossref = await searchByTitle(q, timeoutMs);
+  // title / citation: Crossref ∥ OpenAlex in parallel
+  const [crossref, oa] = await Promise.all([
+    searchByTitle(q, timeoutMs),
+    searchOpenAlex(q, timeoutMs),
+  ]);
+
   let best = pickBestWork(crossref, 20, q);
   let source: ResolveResult["source"] = "crossref";
-  let oa: Awaited<ReturnType<typeof searchOpenAlex>> = [];
-  // Selection pool for ambiguity: same API source as `best` (not concatenated)
   let selectPool = crossref;
 
   if (!best) {
-    oa = await searchOpenAlex(q, timeoutMs);
-    // OpenAlex scores ≠ Crossref; only accept title match (avoid wrong-paper downloads)
+    // OpenAlex scores ≠ Crossref; only accept title match
     best = pickBestWork(oa, Number.MAX_SAFE_INTEGER, q);
     if (best) {
       source = "openalex";
@@ -143,7 +146,6 @@ export async function resolveToDoi(
       : "crossref",
   }));
 
-  // Ensure the selected work appears in candidates (OpenAlex best may be beyond top 5 of pool)
   if (best && !candidates.some((c) => c.doi === best!.doi)) {
     candidates.unshift({
       doi: best.doi,
@@ -164,7 +166,6 @@ export async function resolveToDoi(
     };
   }
 
-  // Ambiguous: within the same source, selected score is neck-and-neck with a rival
   if (isAmbiguousSelection(selectPool, best, q)) {
     return {
       ok: false,
@@ -204,16 +205,44 @@ function isAmbiguousSelection(
   return Math.abs(selected.score - (rivals[0].score as number)) < 2;
 }
 
+type WorkMeta = {
+  title?: string;
+  authors?: string[];
+  year?: number;
+  container?: string;
+};
+
+/**
+ * Fast path for explicit DOI: start Crossref meta and PDF fetch in parallel
+ * when filename style does not need author/title for the path.
+ */
 export async function downloadPaper(
   options: DownloadOptions,
   config: SciPdfConfig,
 ): Promise<DownloadResult> {
   const query = options.query.trim();
   try {
+    const type = inferType(query, options.queryType ?? "auto");
+    const timeoutMs = Math.min(config.timeoutMs, 20_000);
+
+    // DOI fast-path: parallel meta + download when path only needs DOI
+    if (type === "doi" || (type === "auto" && looksLikeDoi(query))) {
+      const doi = normalizeDoi(query);
+      if (!doi) {
+        return {
+          ok: false,
+          query,
+          code: "INVALID_DOI",
+          error: `Invalid DOI: ${query}`,
+        };
+      }
+      return await downloadByDoi(doi, query, options, config, timeoutMs);
+    }
+
     const resolved = await resolveToDoi(
       query,
       options.queryType ?? "auto",
-      Math.min(config.timeoutMs, 20_000),
+      timeoutMs,
     );
 
     if (!resolved.ok || !resolved.doi) {
@@ -226,124 +255,186 @@ export async function downloadPaper(
       };
     }
 
-    const doi = resolved.doi;
-    const title = resolved.title;
-    const authors = resolved.authors;
-    const year = resolved.year;
-
-    const downloadDir = options.outdir ?? config.downloadDir;
-    await ensureDir(downloadDir);
-    const path = buildPdfPath(downloadDir, doi, {
-      filename: options.filename,
-      style: config.filenameStyle,
-      title,
-      authors,
-      year,
-    });
-
-    const citation =
-      options.withCitation !== false
-        ? buildCitations({
-            doi,
-            title,
-            authors,
-            year,
-            container: resolved.container,
-          })
-        : undefined;
-
-    // Cache hit only if file is a real PDF AND DOI matches (sidecar / encoded name)
-    if (!options.force && (await isCacheHitForDoi(path, doi))) {
-      return {
-        ok: true,
-        query,
-        doi,
-        title,
-        authors,
-        year,
-        path,
-        source: "cache",
-        cached: true,
-        citation,
-      };
-    }
-
-    // Default path: Sci-Hub / pdfHosts.
-    // Unpaywall is optional: only if email configured AND preferOa=true.
-    const tryUnpaywall =
-      config.preferOa && hasUnpaywallEmail(config);
-
-    if (tryUnpaywall) {
-      const oa = await fetchPdfViaUnpaywall(doi, config);
-      if (oa) {
-        const bytes = await savePdf(path, oa.pdfBytes, doi);
-        return {
-          ok: true,
-          query,
-          doi,
-          title: title ?? oa.meta.title,
-          authors,
-          year,
-          path,
-          source: "unpaywall",
-          mirror: oa.pdfUrl,
-          bytes,
-          cached: false,
-          citation,
-          candidates: resolved.candidates,
-          oa: {
-            hostType: oa.meta.hostType,
-            version: oa.meta.version,
-            license: oa.meta.license,
-            pdfUrl: oa.pdfUrl,
-          },
-        };
-      }
-      // OA miss → continue to Sci-Hub if allowed
-    }
-
-    if (config.allowScihub) {
-      const { pdfBytes, mirror } = await fetchPdfViaSciHub(doi, config);
-      const bytes = await savePdf(path, pdfBytes, doi);
-      return {
-        ok: true,
-        query,
-        doi,
-        title,
-        authors,
-        year,
-        path,
-        source: "scihub",
-        mirror,
-        bytes,
-        cached: false,
-        citation,
-        candidates: resolved.candidates,
-      };
-    }
-
-    return {
-      ok: false,
+    return await downloadByDoi(
+      resolved.doi,
       query,
-      doi,
-      title,
-      code: "PDF_NOT_IN_DB",
-      error: tryUnpaywall
-        ? "No Open Access PDF from Unpaywall, and Sci-Hub is disabled (SCIPDF_ALLOW_SCIHUB=false)."
-        : "Sci-Hub is disabled and Unpaywall is not enabled. Default is Sci-Hub (SCIPDF_ALLOW_SCIHUB=true). Optional OA: set SCIPDF_UNPAYWALL_EMAIL and SCIPDF_PREFER_OA=true.",
-      candidates: resolved.candidates,
-    };
+      options,
+      config,
+      timeoutMs,
+      {
+        title: resolved.title,
+        authors: resolved.authors,
+        year: resolved.year,
+        container: resolved.container,
+      },
+      resolved.candidates,
+      /* skipMeta */ true,
+    );
   } catch (e) {
     const code = codeFromError(e);
     const error = e instanceof Error ? e.message : String(e);
+    const failure: SourceFailureSummary | undefined =
+      (e instanceof SciPdfError ? e.failure : undefined) ??
+      failureFromCaught(e);
     return {
       ok: false,
       query,
       code,
       error,
+      failure,
       candidates: e instanceof SciPdfError ? e.candidates : undefined,
     };
   }
+}
+
+async function downloadByDoi(
+  doi: string,
+  query: string,
+  options: DownloadOptions,
+  config: SciPdfConfig,
+  timeoutMs: number,
+  knownMeta?: WorkMeta,
+  candidates?: DownloadResult["candidates"],
+  skipMeta = false,
+): Promise<DownloadResult> {
+  const metaPromise: Promise<WorkMeta | null> = skipMeta
+    ? Promise.resolve(knownMeta ?? null)
+    : getWorkByDoi(doi, timeoutMs).then((m) =>
+        m
+          ? {
+              title: m.title,
+              authors: m.authors,
+              year: m.year,
+              container: m.container,
+            }
+          : null,
+      );
+
+  const needsMetaForPath =
+    !options.filename && config.filenameStyle === "author_year_title";
+
+  let meta = knownMeta ?? null;
+  if (needsMetaForPath && !meta) {
+    meta = await metaPromise;
+  }
+
+  const downloadDir = options.outdir ?? config.downloadDir;
+  await ensureDir(downloadDir);
+  const path = buildPdfPath(downloadDir, doi, {
+    filename: options.filename,
+    style: config.filenameStyle,
+    title: meta?.title,
+    authors: meta?.authors,
+    year: meta?.year,
+  });
+
+  // Cache hit — still await meta for citation if needed
+  if (!options.force && (await isCacheHitForDoi(path, doi))) {
+    if (!meta) meta = await metaPromise;
+    const citation =
+      options.withCitation !== false
+        ? buildCitations({
+            doi,
+            title: meta?.title,
+            authors: meta?.authors,
+            year: meta?.year,
+            container: meta?.container,
+          })
+        : undefined;
+    return {
+      ok: true,
+      query,
+      doi,
+      title: meta?.title,
+      authors: meta?.authors,
+      year: meta?.year,
+      path,
+      source: "cache",
+      cached: true,
+      citation,
+      candidates,
+    };
+  }
+
+  // preferOa: multi-source OA pipeline (Unpaywall + free OA APIs)
+  const tryOa = config.preferOa;
+
+  type PdfHit = {
+    pdfBytes: Uint8Array;
+    source: NonNullable<DownloadResult["source"]>;
+    mirror?: string;
+    oa?: DownloadResult["oa"];
+    titleHint?: string;
+  };
+
+  const fetchPdf = async (): Promise<PdfHit> => {
+    if (tryOa) {
+      const oa = await fetchPdfViaOa(doi, config);
+      if (oa) {
+        return {
+          pdfBytes: oa.pdfBytes,
+          source: oa.provider,
+          mirror: oa.pdfUrl,
+          titleHint: oa.meta?.title,
+          oa: {
+            provider: oa.provider,
+            hostType: oa.meta?.hostType,
+            version: oa.meta?.version,
+            license: oa.meta?.license,
+            pdfUrl: oa.pdfUrl,
+          },
+        };
+      }
+    }
+
+    if (config.allowScihub) {
+      const { pdfBytes, mirror } = await fetchPdfViaSciHub(doi, config);
+      return { pdfBytes, source: "scihub", mirror };
+    }
+
+    throw new SciPdfError(
+      "PDF_NOT_IN_DB",
+      tryOa
+        ? "No Open Access PDF found, and Sci-Hub is disabled (SCIPDF_ALLOW_SCIHUB=false)."
+        : "Sci-Hub is disabled and OA is not enabled. Default is Sci-Hub. Optional OA: set SCIPDF_PREFER_OA=true (Unpaywall also needs SCIPDF_UNPAYWALL_EMAIL).",
+    );
+  };
+
+  // Parallel: finish metadata + PDF bytes (when meta not already required for path)
+  const [metaDone, hit] = await Promise.all([
+    meta ? Promise.resolve(meta) : metaPromise,
+    fetchPdf(),
+  ]);
+  meta = metaDone ?? meta;
+
+  const bytes = await savePdf(path, hit.pdfBytes, doi);
+  const citation =
+    options.withCitation !== false
+      ? buildCitations({
+          doi,
+          title: meta?.title ?? hit.titleHint,
+          authors: meta?.authors,
+          year: meta?.year,
+          container: meta?.container,
+        })
+      : undefined;
+
+  return {
+    ok: true,
+    query,
+    doi,
+    title: meta?.title ?? hit.titleHint,
+    authors: meta?.authors,
+    year: meta?.year,
+    path,
+    source: hit.source,
+    mirror: hit.mirror,
+    bytes,
+    cached: false,
+    citation,
+    candidates,
+    oa: hit.oa,
+  };
 }
 
 async function mapPool<T, R>(
@@ -359,7 +450,6 @@ async function mapPool<T, R>(
       results[i] = await fn(items[i], i);
     }
   }
-  // concurrency may arrive as float; floor and clamp so we never spawn 0 workers
   const n = Math.max(
     1,
     Math.min(Math.floor(Number(concurrency) || 1), Math.max(items.length, 1)),
@@ -390,12 +480,14 @@ export async function downloadPapers(
   config: SciPdfConfig,
   extras?: Omit<DownloadOptions, "query"> & {
     writeManifest?: boolean;
-    /** If true, expand bib/ris/multiline blobs */
     expandText?: boolean;
   },
 ): Promise<BatchDownloadResult> {
-  let expanded = queries.flatMap((q) => {
-    if (extras?.expandText !== false && (q.includes("\n") || /@\w+\{|^TY\s+-/m.test(q))) {
+  const expanded = queries.flatMap((q) => {
+    if (
+      extras?.expandText !== false &&
+      (q.includes("\n") || /@\w+\{|^TY\s+-/m.test(q))
+    ) {
       const extracted = extractQueriesFromText(q);
       return extracted.length ? extracted : [q];
     }
@@ -430,7 +522,7 @@ export async function downloadPapers(
         results,
       );
     } catch {
-      // ignore manifest IO errors
+      // ignore
     }
   }
 

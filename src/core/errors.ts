@@ -1,18 +1,21 @@
-import type { ErrorCode } from "../types.js";
+import type { ErrorCode, SourceFailureSummary } from "../types.js";
 
 export class SciPdfError extends Error {
   code: ErrorCode;
   candidates?: Array<{ doi: string; title?: string; score?: number }>;
+  failure?: SourceFailureSummary;
 
   constructor(
     code: ErrorCode,
     message: string,
     candidates?: Array<{ doi: string; title?: string; score?: number }>,
+    failure?: SourceFailureSummary,
   ) {
     super(message);
     this.name = "SciPdfError";
     this.code = code;
     this.candidates = candidates;
+    this.failure = failure;
   }
 }
 
@@ -84,7 +87,11 @@ export function aggregateSourceErrors(messages: string[]): ErrorCode {
       return "MIRROR_BLOCKED" as ErrorCode;
     if (/not a valid PDF|invalid pdf|claimed PDF/i.test(m))
       return "INVALID_PDF" as ErrorCode;
-    if (/not found|not available|PDF not available/i.test(m))
+    if (
+      /not found|not available|PDF not available|Could not find PDF link|no PDF link|\bHTTP 404\b/i.test(
+        m,
+      )
+    )
       return "PDF_NOT_IN_DB" as ErrorCode;
     return "ALL_SOURCES_FAILED" as ErrorCode;
   });

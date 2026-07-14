@@ -26,6 +26,8 @@
   "timeoutMs": 30000,
   "fastFailTimeoutMs": 8000,
   "concurrency": 2,
+  "sourceRaceWidth": 5,
+  "pdfNotFoundConfirmations": 1,
   "filenameStyle": "doi",
   "healthCacheTtlMs": 900000,
   "minRequestGapMs": 200,
