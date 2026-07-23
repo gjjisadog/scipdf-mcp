@@ -2,7 +2,7 @@ import type { SciPdfConfig } from "../types.js";
 import { throttle } from "./rateLimit.js";
 import { debugLog } from "./debug.js";
 import { isPdfBuffer } from "./storage.js";
-import { fetchBuffer, fetchJson } from "./http.js";
+import { fetchJson, fetchSafePublicBuffer } from "./http.js";
 import { assertSafePublicUrl } from "./urlSafety.js";
 
 const API = "https://api.unpaywall.org/v2";
@@ -146,7 +146,7 @@ export async function downloadOaPdf(
 ): Promise<Uint8Array> {
   const url = assertSafePublicUrl(pdfUrl);
   await throttle(config.minRequestGapMs, url);
-  const { response: res, buffer: buf } = await fetchBuffer(
+  const { response: res, buffer: buf } = await fetchSafePublicBuffer(
     url,
     {
       redirect: "follow",

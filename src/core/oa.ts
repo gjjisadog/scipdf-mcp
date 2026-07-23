@@ -5,7 +5,7 @@
 
 import type { SciPdfConfig } from "../types.js";
 import { debugLog } from "./debug.js";
-import { fetchBuffer, fetchJson } from "./http.js";
+import { fetchJson, fetchSafePublicBuffer } from "./http.js";
 import { throttle } from "./rateLimit.js";
 import { isPdfBuffer } from "./storage.js";
 import { assertSafePublicUrl } from "./urlSafety.js";
@@ -39,7 +39,7 @@ async function downloadPdfUrl(
 ): Promise<Uint8Array> {
   await throttle(config.minRequestGapMs, pdfUrl);
   const url = assertSafePublicUrl(pdfUrl);
-  const { response: res, buffer: buf } = await fetchBuffer(
+  const { response: res, buffer: buf } = await fetchSafePublicBuffer(
     url,
     {
       redirect: "follow",

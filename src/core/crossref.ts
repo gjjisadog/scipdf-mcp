@@ -95,13 +95,27 @@ export function normalizeTitle(s: string): string {
     .trim();
 }
 
-/** True when query and work title clearly match (substring either way). */
+/** True when query and work title clearly match. */
 export function titlesMatch(queryTitle: string, workTitle?: string): boolean {
   if (!workTitle) return false;
   const q = normalizeTitle(queryTitle);
   const t = normalizeTitle(workTitle);
   if (q.length < 2 || t.length < 2) return false;
-  return q === t || t.includes(q) || q.includes(t);
+  if (q === t) return true;
+
+  const [shorter, longer] = q.length < t.length ? [q, t] : [t, q];
+  if (!longer.includes(shorter)) return false;
+
+  const compactShorter = shorter.replace(/\s/g, "");
+  const compactLonger = longer.replace(/\s/g, "");
+  if (compactShorter.length / compactLonger.length < 0.6) return false;
+
+  // A single short Latin word (for example, "Introduction") is too generic
+  // to override Crossref's score ranking. CJK titles have no word boundaries,
+  // so use their compact character length instead.
+  if (/\p{Script=Han}/u.test(compactShorter)) return compactShorter.length >= 6;
+  const words = shorter.match(/[\p{L}\p{N}]+/gu) ?? [];
+  return words.length >= 2 && compactShorter.length >= 12;
 }
 
 /**

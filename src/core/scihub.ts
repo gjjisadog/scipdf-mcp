@@ -9,7 +9,11 @@ import { getHealth, markBad, markGood, sortByHealth } from "./health.js";
 import { throttle } from "./rateLimit.js";
 import { debugLog } from "./debug.js";
 import { isPdfBuffer } from "./storage.js";
-import { contentTypeIsPdf, fetchBuffer, fetchText } from "./http.js";
+import {
+  contentTypeIsPdf,
+  fetchSafePublicBuffer,
+  fetchSafePublicText,
+} from "./http.js";
 import { assertSafePublicUrl } from "./urlSafety.js";
 import type { SourceFailureSummary } from "../types.js";
 
@@ -163,7 +167,7 @@ async function downloadPdfBytes(
   const url = assertSafePublicUrl(cleanPdfUrl(pdfUrl));
   await throttle(config.minRequestGapMs, url);
   const start = Date.now();
-  const { response: res, buffer: buf } = await fetchBuffer(
+  const { response: res, buffer: buf } = await fetchSafePublicBuffer(
     url,
     {
       headers: browserHeaders(config, {
@@ -205,7 +209,7 @@ export async function fetchFromMirror(
   const timeout = Math.min(config.timeoutMs, config.fastFailTimeoutMs + 5000);
 
   // Always read body under the same timeout (headers + body)
-  const { response: res, buffer } = await fetchBuffer(
+  const { response: res, buffer } = await fetchSafePublicBuffer(
     pageUrl,
     {
       headers: browserHeaders(config, { Referer: base }),
@@ -576,7 +580,7 @@ export async function checkMirror(
   }
   const start = Date.now();
   try {
-    const { response: res, text } = await fetchText(
+    const { response: res, text } = await fetchSafePublicText(
       url,
       {
         method: "GET",

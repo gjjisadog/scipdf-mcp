@@ -18,6 +18,8 @@ export interface SourceFailureSummary {
   attempted: number;
   absent: number;
   blocked: number;
+  /** Reachable mirror temporarily unavailable (HTTP 502/503). */
+  unavailable?: number;
   timeouts: number;
   other: number;
   earlyStop?: boolean;

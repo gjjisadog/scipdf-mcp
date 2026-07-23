@@ -302,7 +302,8 @@ export function createServer(): McpServer {
       path: z.string().describe("Absolute path to a local PDF"),
     },
     async ({ path }) => {
-      const r = await openPath(path);
+      refreshConfig();
+      const r = await openPath(path, config.downloadDir);
       return jsonResult(r);
     },
   );

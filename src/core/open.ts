@@ -1,14 +1,53 @@
 import { spawn } from "node:child_process";
 import { platform } from "node:os";
-import { access, constants } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isValidPdfFile } from "./storage.js";
+
+function isPathInsideDir(dir: string, path: string): boolean {
+  const rel = relative(dir, path);
+  return (
+    rel !== "" &&
+    rel !== ".." &&
+    !rel.startsWith(`..${sep}`) &&
+    !isAbsolute(rel)
+  );
+}
 
 export async function openPath(
   path: string,
+  downloadDir: string,
 ): Promise<{ ok: boolean; error?: string }> {
+  if (!isAbsolute(path)) {
+    return { ok: false, error: `Path must be absolute: ${path}` };
+  }
+
+  let allowedDir: string;
   try {
-    await access(path, constants.F_OK);
+    allowedDir = await realpath(resolve(downloadDir));
+  } catch {
+    return {
+      ok: false,
+      error: `Download directory not found: ${downloadDir}`,
+    };
+  }
+
+  let target: string;
+  try {
+    // realpath both rejects missing paths and prevents a symlink inside the
+    // download directory from escaping the allowed directory.
+    target = await realpath(resolve(path));
   } catch {
     return { ok: false, error: `File not found: ${path}` };
+  }
+  if (!isPathInsideDir(allowedDir, target)) {
+    return {
+      ok: false,
+      error: `Refusing to open file outside download directory: ${path}`,
+    };
+  }
+  if (!(await isValidPdfFile(target))) {
+    return { ok: false, error: `File is not a valid PDF: ${path}` };
   }
 
   const os = platform();
@@ -16,13 +55,13 @@ export async function openPath(
   let args: string[];
   if (os === "darwin") {
     cmd = "open";
-    args = [path];
+    args = [target];
   } else if (os === "win32") {
     cmd = "cmd";
-    args = ["/c", "start", "", path];
+    args = ["/c", "start", "", target];
   } else {
     cmd = "xdg-open";
-    args = [path];
+    args = [target];
   }
 
   return new Promise((resolve) => {
