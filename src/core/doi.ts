@@ -55,11 +55,19 @@ export function normalizeDoi(input: string): string | null {
   let s = input.trim();
   if (!s) return null;
 
-  s = s
-    .replace(/^https?:\/\/(dx\.)?doi\.org\//i, "")
-    .replace(/^doi:\s*/i, "")
-    .replace(/^DOI\s+/i, "")
-    .trim();
+  // A DOI resolver URL may carry analytics query parameters or a fragment.
+  // Use pathname rather than trimming on `?` / `#`, because those characters
+  // are otherwise valid in a bare DOI suffix.
+  if (/^https?:\/\/(?:dx\.)?doi\.org(?:\/|$)/i.test(s)) {
+    try {
+      const url = new URL(s);
+      s = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
+    } catch {
+      // Fall through to the regular token extraction below.
+    }
+  }
+
+  s = s.replace(/^doi:\s*/i, "").replace(/^DOI\s+/i, "").trim();
 
   const m = s.match(DOI_TOKEN_RE);
   if (!m) return null;
@@ -102,13 +110,12 @@ export function extractDoiFromText(text: string): string | null {
  * Different DOIs (e.g. 10.1000/a/b vs 10.1000/a:b) must not share a path.
  */
 export function doiToFilename(doi: string): string {
-  const safe = doi.replace(/[^A-Za-z0-9._-]/g, (ch) => {
-    return (
-      "%" +
-      Buffer.from(ch, "utf8")
-        .toString("hex")
-        .toUpperCase()
-    );
+  // `u` keeps astral Unicode characters intact before UTF-8 encoding.
+  const safe = doi.replace(/[^A-Za-z0-9._-]/gu, (ch) => {
+    return Buffer.from(ch, "utf8")
+      .toString("hex")
+      .toUpperCase()
+      .replace(/../g, "%$&");
   });
   if (safe.length <= 180) return `${safe}.pdf`;
   const head = safe.slice(0, 140);
@@ -131,9 +138,9 @@ export function filenameToDoiHint(name: string): string | null {
   const base = name.replace(/\.pdf$/i, "").replace(/~[0-9a-f]{8}$/i, "");
   if (!base.startsWith("10.")) return null;
   try {
-    const decoded = base.replace(/%([0-9A-Fa-f]{2})/g, (_, hex: string) =>
-      String.fromCharCode(parseInt(hex, 16)),
-    );
+    // doiToFilename percent-encodes UTF-8 bytes. Decoding bytes one at a time
+    // produces mojibake for non-ASCII DOI suffixes.
+    const decoded = decodeURIComponent(base);
     return normalizeDoi(decoded);
   } catch {
     return null;

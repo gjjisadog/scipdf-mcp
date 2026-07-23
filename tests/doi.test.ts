@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   doiToFilename,
   extractDoiFromText,
+  filenameToDoiHint,
   looksLikeDoi,
   looksLikeUrl,
   normalizeDoi,
@@ -16,6 +17,14 @@ describe("normalizeDoi", () => {
     expect(normalizeDoi("https://doi.org/10.1038/nature12373")).toBe(
       "10.1038/nature12373",
     );
+  });
+
+  it("excludes query and fragment from DOI resolver URLs", () => {
+    expect(
+      normalizeDoi(
+        "https://doi.org/10.1002/(SICI)1097-0142(19960201)77:3<454::AID-CNCR7>3.0.CO;2-N?utm_source=test#citation",
+      ),
+    ).toBe("10.1002/(SICI)1097-0142(19960201)77:3<454::AID-CNCR7>3.0.CO;2-N");
   });
 
   it("strips doi: prefix", () => {
@@ -57,6 +66,11 @@ describe("doiToFilename", () => {
     const a = doiToFilename("10.1000/a/b");
     const b = doiToFilename("10.1000/a:b");
     expect(a).not.toBe(b);
+  });
+
+  it("round-trips Unicode DOI suffixes using UTF-8 percent encoding", () => {
+    const doi = "10.1000/深度学习";
+    expect(filenameToDoiHint(doiToFilename(doi))).toBe(doi);
   });
 });
 

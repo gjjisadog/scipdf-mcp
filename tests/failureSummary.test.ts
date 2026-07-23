@@ -33,4 +33,15 @@ describe("summarizeSourceErrors", () => {
     expect(msg).toContain("10.1/x");
     expect(msg).toContain("attempted=2");
   });
+
+  it("separates rate limits from temporarily unavailable mirrors", () => {
+    const s = summarizeSourceErrors([
+      "https://a/: Mirror HTTP 429: https://a/x",
+      "https://b/: Mirror HTTP 502: https://b/x",
+      "https://c/: Mirror HTTP 503: https://c/x",
+    ]);
+    expect(s.blocked).toBe(1);
+    expect(s.unavailable).toBe(2);
+    expect(s.other).toBe(0);
+  });
 });

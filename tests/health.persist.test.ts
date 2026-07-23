@@ -6,6 +6,7 @@ import {
   markBad,
   markGood,
   resetHealthLoader,
+  setHealth,
   sortByHealth,
 } from "../src/core/health.js";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -76,5 +77,18 @@ describe("health persistence", () => {
     expect(ordered.indexOf("https://b/")).toBeLessThan(
       ordered.indexOf("https://a/"),
     );
+  });
+
+  it("does not return a cache entry when force refresh uses ttl=0", () => {
+    process.env.SCIPDF_HEALTH_PERSIST = "0";
+    resetHealthLoader();
+    setHealth("https://force.example/", {
+      ok: true,
+      latencyMs: 10,
+      checkedAt: Date.now(),
+    });
+
+    expect(getHealth("https://force.example/", 0)).toBeNull();
+    expect(getHealth("https://force.example/", 60_000)?.ok).toBe(true);
   });
 });

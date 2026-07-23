@@ -4,6 +4,7 @@ import {
   looksLikeCitation,
   citationToSearchQuery,
 } from "../src/core/citations.js";
+import { formatBibtex } from "../src/core/citeFormat.js";
 
 describe("extractQueriesFromText", () => {
   it("extracts from bibtex", () => {
@@ -34,5 +35,19 @@ describe("citationToSearchQuery", () => {
     expect(
       citationToSearchQuery("foo bar 10.1038/nature12373 more"),
     ).toBe("10.1038/nature12373");
+  });
+});
+
+describe("formatBibtex", () => {
+  it("uses a stable ASCII key for non-Latin author names", () => {
+    const work = {
+      doi: "10.1000/cjk",
+      authors: ["王小明"],
+      year: 2024,
+      title: "测试论文",
+    };
+    const first = formatBibtex(work);
+    expect(first).toMatch(/^@article\{ref2024[0-9a-f]{6},/);
+    expect(formatBibtex(work)).toBe(first);
   });
 });

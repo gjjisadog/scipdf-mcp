@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildPdfPath,
   isPdfBuffer,
@@ -7,12 +7,20 @@ import {
   MIN_PDF_BYTES,
 } from "../src/core/storage.js";
 import { extractQueriesFromText } from "../src/core/citations.js";
-import { contentTypeIsPdf } from "../src/core/http.js";
+import {
+  contentTypeIsPdf,
+  fetchSafePublicBuffer,
+} from "../src/core/http.js";
 import { assertSafePublicUrl, isBlockedHostname } from "../src/core/urlSafety.js";
 import { pickBestWork, normalizeTitle } from "../src/core/crossref.js";
+import { openPath } from "../src/core/open.js";
 import { join } from "node:path";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function fakePdf(extra = 0): Buffer {
   // Valid-looking PDF: header + padding + %%EOF (must be >= MIN_PDF_BYTES)
@@ -165,10 +173,105 @@ describe("SSRF protection", () => {
     expect(isBlockedHostname("10.1")).toBe(true);
   });
 
+  it("blocks IPv4-mapped IPv6 after URL canonicalization", () => {
+    // WHATWG URL turns ::ffff:127.0.0.1 into ::ffff:7f00:1.
+    expect(isBlockedHostname("[::ffff:7f00:1]")).toBe(true);
+    expect(isBlockedHostname("::ffff:127.0.0.1")).toBe(true);
+    expect(() =>
+      assertSafePublicUrl("http://[::ffff:127.0.0.1]/admin"),
+    ).toThrow(/SSRF|private/i);
+  });
+
+  it("blocks the whole IPv6 link-local fe80::/10 range", () => {
+    expect(isBlockedHostname("[fe80::1]")).toBe(true);
+    expect(isBlockedHostname("[fe81::1]")).toBe(true);
+    expect(isBlockedHostname("[febf::1]")).toBe(true);
+  });
+
   it("assertSafePublicUrl rejects private URLs", () => {
     expect(() => assertSafePublicUrl("http://127.0.0.1:9/")).toThrow(/SSRF|private/i);
     expect(() => assertSafePublicUrl("http://127.1/")).toThrow(/SSRF|private/i);
     expect(() => assertSafePublicUrl("https://sci-hub.se/")).not.toThrow();
+  });
+});
+
+describe("safe public redirects", () => {
+  it("checks redirect targets before fetching them", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: "http://[::ffff:127.0.0.1]/admin" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchSafePublicBuffer("https://public.example/download", {}, 1_000),
+    ).rejects.toThrow(/SSRF|private/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows safe relative redirects", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "https://public.example/download") {
+        return new Response(null, {
+          status: 302,
+          headers: { location: "/paper.pdf" },
+        });
+      }
+      return new Response(fakePdf(), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchSafePublicBuffer(
+      "https://public.example/download",
+      {},
+      1_000,
+    );
+    expect(result.buffer).toEqual(fakePdf());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1][0])).toBe(
+      "https://public.example/paper.pdf",
+    );
+  });
+});
+
+describe("open path restrictions", () => {
+  it("rejects files outside the configured download directory, including symlinks", async () => {
+    const root = await mkdtemp(join(tmpdir(), "scipdf-open-"));
+    const downloadDir = join(root, "downloads");
+    const outside = join(root, "outside.pdf");
+    const link = join(downloadDir, "linked.pdf");
+    try {
+      await mkdir(downloadDir);
+      await writeFile(outside, fakePdf());
+      await symlink(outside, link);
+
+      const direct = await openPath(outside, downloadDir);
+      const linked = await openPath(link, downloadDir);
+      expect(direct.ok).toBe(false);
+      expect(direct.error).toMatch(/outside download directory/i);
+      expect(linked.ok).toBe(false);
+      expect(linked.error).toMatch(/outside download directory/i);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects existing non-PDF files before invoking the system opener", async () => {
+    const downloadDir = await mkdtemp(join(tmpdir(), "scipdf-open-"));
+    const path = join(downloadDir, "not-a-pdf.pdf");
+    try {
+      await writeFile(path, "not a PDF");
+      const result = await openPath(path, downloadDir);
+      expect(result).toEqual({
+        ok: false,
+        error: `File is not a valid PDF: ${path}`,
+      });
+    } finally {
+      await rm(downloadDir, { recursive: true, force: true });
+    }
   });
 });
 

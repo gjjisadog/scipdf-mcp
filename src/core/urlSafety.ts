@@ -71,14 +71,72 @@ function isPrivateIpv4(host: string): boolean {
   return isPrivateIpv4Parts(parts);
 }
 
+/** Parse a bracket-free IPv6 literal into its eight 16-bit words. */
+function parseIpv6Words(host: string): number[] | null {
+  let h = host.toLowerCase().replace(/^\[|\]$/g, "");
+
+  // URL normally canonicalizes an embedded IPv4 address to hexadecimal, but
+  // keep support for the text form too so isBlockedHostname is safe on its own.
+  if (h.includes(".")) {
+    const colon = h.lastIndexOf(":");
+    if (colon < 0) return null;
+    const ipv4 = h.slice(colon + 1).split(".").map(Number);
+    if (
+      ipv4.length !== 4 ||
+      ipv4.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+    ) {
+      return null;
+    }
+    h = `${h.slice(0, colon + 1)}${((ipv4[0] << 8) | ipv4[1]).toString(16)}:${((ipv4[2] << 8) | ipv4[3]).toString(16)}`;
+  }
+
+  const doubleColon = h.indexOf("::");
+  if (doubleColon !== h.lastIndexOf("::")) return null;
+
+  const left = doubleColon >= 0 ? h.slice(0, doubleColon) : h;
+  const right = doubleColon >= 0 ? h.slice(doubleColon + 2) : "";
+  const leftParts = left ? left.split(":") : [];
+  const rightParts = right ? right.split(":") : [];
+  const parts = [...leftParts, ...rightParts];
+  if (
+    parts.some((part) => !/^[0-9a-f]{1,4}$/i.test(part)) ||
+    (doubleColon < 0 && parts.length !== 8) ||
+    (doubleColon >= 0 && parts.length >= 8)
+  ) {
+    return null;
+  }
+
+  const words = parts.map((part) => Number.parseInt(part, 16));
+  if (doubleColon >= 0) {
+    words.splice(leftParts.length, 0, ...Array(8 - parts.length).fill(0));
+  }
+  return words.length === 8 ? words : null;
+}
+
 function isPrivateIpv6(host: string): boolean {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
-  if (h === "::1" || h === "0:0:0:0:0:0:0:1") return true;
-  if (h.startsWith("fe80:") || h.startsWith("fc") || h.startsWith("fd"))
-    return true;
-  // IPv4-mapped :ffff:127.0.0.1
-  const m = h.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  if (m && isPrivateIpv4(m[1])) return true;
+  const words = parseIpv6Words(host);
+  if (!words) return false;
+
+  const allZero = words.every((word) => word === 0);
+  if (allZero || (words.slice(0, 7).every((word) => word === 0) && words[7] === 1)) {
+    return true; // :: and ::1
+  }
+  // fe80::/10 includes fe80 through febf, not just the fe80::/16 subset.
+  if ((words[0] & 0xffc0) === 0xfe80) return true;
+  if ((words[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 (ULA)
+
+  // IPv4-mapped IPv6: ::ffff:w.x.y.z. WHATWG URL normalizes this to
+  // ::ffff:7f00:1, so compare the final two words instead of matching text.
+  const isIpv4Mapped =
+    words.slice(0, 5).every((word) => word === 0) && words[5] === 0xffff;
+  if (isIpv4Mapped) {
+    return isPrivateIpv4Parts([
+      words[6] >>> 8,
+      words[6] & 0xff,
+      words[7] >>> 8,
+      words[7] & 0xff,
+    ]);
+  }
   return false;
 }
 

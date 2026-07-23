@@ -18,6 +18,7 @@ import {
   isAbsolute,
   sep,
 } from "node:path";
+import { randomUUID } from "node:crypto";
 import { doiToFilename, filenameToDoiHint, normalizeDoi } from "./doi.js";
 import type { FilenameStyle } from "../types.js";
 
@@ -271,7 +272,10 @@ export async function savePdf(
     throw new Error("Refusing to save: buffer is not a valid PDF");
   }
   await mkdir(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+  // A timestamp alone can collide when concurrent downloads target the same
+  // filename in one process. Keep the final rename atomic, but give every
+  // writer its own staging path.
+  const tmp = `${path}.tmp-${process.pid}-${randomUUID()}`;
   try {
     await writeFile(tmp, data);
     await rename(tmp, path);

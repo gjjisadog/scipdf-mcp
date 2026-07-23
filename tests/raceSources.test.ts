@@ -193,4 +193,16 @@ describe("aggregateSourceErrors absence", () => {
       ]),
     ).toBe("PDF_NOT_IN_DB");
   });
+
+  it("treats HTTP 429 as blocked but 502/503 as temporary source failures", () => {
+    expect(
+      aggregateSourceErrors(["https://a/: Mirror HTTP 429: https://a/x"]),
+    ).toBe("MIRROR_BLOCKED");
+    expect(
+      aggregateSourceErrors(["https://a/: Mirror HTTP 502: https://a/x"]),
+    ).toBe("ALL_SOURCES_FAILED");
+    expect(
+      aggregateSourceErrors(["https://a/: Mirror HTTP 503: https://a/x"]),
+    ).toBe("ALL_SOURCES_FAILED");
+  });
 });

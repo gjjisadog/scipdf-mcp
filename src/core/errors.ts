@@ -83,7 +83,7 @@ export function codeFromError(e: unknown): ErrorCode {
 export function aggregateSourceErrors(messages: string[]): ErrorCode {
   if (messages.length === 0) return "ALL_SOURCES_FAILED";
   const codes = messages.map((m) => {
-    if (/403|cloudflare|ddos|challenge|just a moment/i.test(m))
+    if (/\b(?:403|429)\b|cloudflare|ddos|challenge|just a moment/i.test(m))
       return "MIRROR_BLOCKED" as ErrorCode;
     if (/not a valid PDF|invalid pdf|claimed PDF/i.test(m))
       return "INVALID_PDF" as ErrorCode;

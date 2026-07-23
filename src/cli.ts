@@ -49,7 +49,7 @@ Usage:
   scipdf-mcp list                List downloaded PDFs
   scipdf-mcp check-mirrors       Probe mirrors (+ pdfHosts), persist health rank
   scipdf-mcp unpaywall <doi>     Lookup Unpaywall OA (needs email)
-  scipdf-mcp open <path>         Open PDF in system viewer
+  scipdf-mcp open <path>         Open a valid PDF from the configured download directory
   scipdf-mcp version
 
 Download flags:
@@ -83,16 +83,18 @@ export async function runCli(argv: string[]): Promise<number> {
 
   const cmd = args[0];
   const rest = args.slice(1);
-  const config = loadConfig();
+  try {
+    // Keep discovery commands usable when an explicit config file is broken.
+    if (cmd === "help" || cmd === "-h" || cmd === "--help") {
+      printHelp();
+      return 0;
+    }
+    if (cmd === "version" || cmd === "-V" || cmd === "--version") {
+      console.log(version());
+      return 0;
+    }
 
-  if (cmd === "help" || cmd === "-h" || cmd === "--help") {
-    printHelp();
-    return 0;
-  }
-  if (cmd === "version" || cmd === "-V" || cmd === "--version") {
-    console.log(version());
-    return 0;
-  }
+    const config = loadConfig();
 
   if (cmd === "download") {
     let parsed;
@@ -131,7 +133,7 @@ export async function runCli(argv: string[]): Promise<number> {
       console.error("Usage: scipdf-mcp resolve <query>");
       return 1;
     }
-    const result = await resolveToDoi(query);
+    const result = await resolveToDoi(query, "auto", config.timeoutMs);
     console.log(JSON.stringify(result, null, 2));
     return result.ok ? 0 : 1;
   }
@@ -276,7 +278,7 @@ export async function runCli(argv: string[]): Promise<number> {
       console.error("Usage: scipdf-mcp open <path>");
       return 1;
     }
-    const r = await openPath(path);
+    const r = await openPath(path, config.downloadDir);
     console.log(JSON.stringify(r, null, 2));
     return r.ok ? 0 : 1;
   }
@@ -284,4 +286,9 @@ export async function runCli(argv: string[]): Promise<number> {
   console.error(`Unknown command: ${cmd}`);
   printHelp();
   return 1;
+  } finally {
+    // The deferred cache write uses an unref'ed timer. CLI startup exits before
+    // it fires, so persist synchronously once the command has finished.
+    flushHealth();
+  }
 }

@@ -91,6 +91,9 @@ export function flushHealth(): void {
 
 export function getHealth(url: string, ttlMs: number): HealthEntry | null {
   loadFromDisk();
+  // A non-positive TTL is the explicit force-refresh signal used by the CLI
+  // and MCP tool. Do not let an entry created in the same millisecond through.
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) return null;
   const key = normalizeKey(url);
   const e = store.get(key);
   if (!e) return null;

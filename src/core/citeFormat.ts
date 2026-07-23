@@ -7,6 +7,28 @@ function firstAuthorLast(authors?: string[]): string {
   return parts[parts.length - 1] || a;
 }
 
+function shortHash(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0").slice(0, 6);
+}
+
+function bibtexKey(work: CrossrefWork & { doi: string }): string {
+  const author = firstAuthorLast(work.authors)
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .replace(/[^A-Za-z0-9]/g, "");
+  const year = work.year ?? "nd";
+
+  // Classic BibTeX keys are safest as ASCII. For CJK and other non-Latin
+  // author names, retain a deterministic DOI-derived suffix instead of
+  // silently collapsing every entry to just its year.
+  return author ? `${author}${year}` : `ref${year}${shortHash(work.doi)}`;
+}
+
 export function formatApa(work: {
   title?: string;
   authors?: string[];
@@ -47,10 +69,7 @@ export function formatGbt(work: {
 }
 
 export function formatBibtex(work: CrossrefWork & { doi: string }): string {
-  const key = `${firstAuthorLast(work.authors)}${work.year ?? "n.d."}`.replace(
-    /[^A-Za-z0-9]/g,
-    "",
-  );
+  const key = bibtexKey(work);
   const authors = (work.authors ?? []).join(" and ") || "Unknown";
   const lines = [
     `@article{${key},`,
