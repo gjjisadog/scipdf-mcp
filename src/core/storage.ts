@@ -18,11 +18,12 @@ import {
   isAbsolute,
   sep,
 } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { doiToFilename, filenameToDoiHint, normalizeDoi } from "./doi.js";
 import type { FilenameStyle } from "../types.js";
+import type { DownloadResult } from "../types.js";
 
-/** Sidecar JSON next to PDF: { doi, savedAt } — prevents wrong-DOI cache hits. */
+/** Identifier sidecar next to PDF; prevents cross-paper cache collisions. */
 export function metaPathForPdf(pdfPath: string): string {
   return `${pdfPath}.scipdf.json`;
 }
@@ -90,6 +91,10 @@ export function buildPdfFilename(
     // DOI hash suffix prevents collisions overwriting different papers
     const tag = doiPathTag(doi);
     return `${author}_${year}_${title}_${tag}.pdf`;
+  }
+  const arxiv = doi.match(/^arxiv:(.+)$/i);
+  if (arxiv) {
+    return `arxiv_${sanitizeFilenamePart(arxiv[1], 140)}.pdf`;
   }
   return doiToFilename(doi);
 }
@@ -213,16 +218,27 @@ export async function isValidPdfFile(path: string): Promise<boolean> {
 }
 
 export interface PdfCacheMeta {
-  doi: string;
+  /** Canonical cache key, e.g. doi:10.x/y or arxiv:2501.01234. */
+  identifier: string;
+  /** Kept for compatibility with sidecars written before identifier support. */
+  doi?: string;
   savedAt: string;
+}
+
+function canonicalCacheIdentifier(value: string): string {
+  const doi = normalizeDoi(value);
+  if (doi) return `doi:${doi.toLowerCase()}`;
+  return value.trim().toLowerCase();
 }
 
 export async function writePdfMeta(
   pdfPath: string,
-  doi: string,
+  identifier: string,
 ): Promise<void> {
+  const doi = normalizeDoi(identifier) ?? undefined;
   const meta: PdfCacheMeta = {
-    doi: normalizeDoi(doi) ?? doi,
+    identifier: canonicalCacheIdentifier(identifier),
+    ...(doi ? { doi } : {}),
     savedAt: new Date().toISOString(),
   };
   await writeFile(metaPathForPdf(pdfPath), JSON.stringify(meta) + "\n", "utf8");
@@ -234,7 +250,11 @@ export async function readPdfMeta(
   try {
     const raw = await readFile(metaPathForPdf(pdfPath), "utf8");
     const j = JSON.parse(raw) as PdfCacheMeta;
-    if (j && typeof j.doi === "string" && j.doi) return j;
+    if (j && typeof j.identifier === "string" && j.identifier) return j;
+    // Upgrade legacy `{ doi, savedAt }` sidecars in memory.
+    if (j && typeof j.doi === "string" && j.doi) {
+      return { ...j, identifier: canonicalCacheIdentifier(j.doi) };
+    }
     return null;
   } catch {
     return null;
@@ -249,15 +269,24 @@ export async function isCacheHitForDoi(
   path: string,
   doi: string,
 ): Promise<boolean> {
+  return isCacheHitForIdentifier(path, doi);
+}
+
+export async function isCacheHitForIdentifier(
+  path: string,
+  identifier: string,
+): Promise<boolean> {
   if (!(await isValidPdfFile(path))) return false;
-  const want = (normalizeDoi(doi) ?? doi).toLowerCase();
+  const want = canonicalCacheIdentifier(identifier);
   const meta = await readPdfMeta(path);
-  if (meta?.doi) {
-    return (normalizeDoi(meta.doi) ?? meta.doi).toLowerCase() === want;
+  if (meta?.identifier) {
+    return canonicalCacheIdentifier(meta.identifier) === want;
   }
   // Legacy files without sidecar: accept only if filename uniquely encodes this DOI
+  const doi = normalizeDoi(identifier);
+  if (!doi) return false;
   const hint = filenameToDoiHint(basename(path));
-  if (hint && hint.toLowerCase() === want) return true;
+  if (hint && canonicalCacheIdentifier(hint) === want) return true;
   // Ambiguous / legacy flat names (e.g. old 10.1000_a_b.pdf) — force re-download
   return false;
 }
@@ -266,7 +295,7 @@ export async function isCacheHitForDoi(
 export async function savePdf(
   path: string,
   data: Uint8Array,
-  doi?: string,
+  identifier?: string,
 ): Promise<number> {
   if (!isPdfBuffer(data)) {
     throw new Error("Refusing to save: buffer is not a valid PDF");
@@ -287,14 +316,22 @@ export async function savePdf(
     }
     throw e;
   }
-  if (doi) {
+  if (identifier) {
     try {
-      await writePdfMeta(path, doi);
+      await writePdfMeta(path, identifier);
     } catch {
       // meta is best-effort; PDF itself is already saved
     }
   }
   return data.byteLength;
+}
+
+export function sha256Bytes(data: Uint8Array): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+export async function sha256File(path: string): Promise<string> {
+  return sha256Bytes(await readFile(path));
 }
 
 /**
@@ -357,7 +394,7 @@ export async function listPaperFiles(
 
 export async function writeManifest(
   downloadDir: string,
-  results: unknown[],
+  results: DownloadResult[],
   filename = "scipdf-manifest.json",
 ): Promise<string> {
   const dir = await ensureDir(downloadDir);
@@ -366,13 +403,57 @@ export async function writeManifest(
   if (!name.toLowerCase().endsWith(".json")) name = "scipdf-manifest.json";
   if (!name || name === ".json") name = "scipdf-manifest.json";
   const path = assertPathInsideDir(dir, join(dir, name));
+  const safeResults = redactManifestValue(results) as DownloadResult[];
   const payload = {
+    manifestVersion: 2,
     generatedAt: new Date().toISOString(),
-    count: results.length,
-    results,
+    summary: {
+      count: safeResults.length,
+      succeeded: safeResults.filter((result) => result.ok).length,
+      failed: safeResults.filter((result) => !result.ok).length,
+      cached: safeResults.filter((result) => result.cached).length,
+    },
+    results: safeResults,
   };
   await writeFile(path, JSON.stringify(payload, null, 2) + "\n");
   return path;
+}
+
+const SECRET_KEY_PATTERN =
+  /(?:api[-_]?key|apikey|token|authorization|cookie|password|secret|insttoken|authtoken)/i;
+
+function redactUrlSecrets(value: string): string {
+  try {
+    const url = new URL(value);
+    for (const key of [...url.searchParams.keys()]) {
+      if (SECRET_KEY_PATTERN.test(key)) url.searchParams.set(key, "[REDACTED]");
+    }
+    return url.href;
+  } catch {
+    return value
+      .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
+      .replace(
+        /([?&](?:api[-_]?key|apikey|token|insttoken|authtoken)=)[^&#\s]+/gi,
+        "$1[REDACTED]",
+      );
+  }
+}
+
+function redactManifestValue(value: unknown, key = ""): unknown {
+  if (SECRET_KEY_PATTERN.test(key)) return "[REDACTED]";
+  if (typeof value === "string") return redactUrlSecrets(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => redactManifestValue(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, childValue]) => [
+        childKey,
+        redactManifestValue(childValue, childKey),
+      ]),
+    );
+  }
+  return value;
 }
 
 export function pathBasename(p: string): string {

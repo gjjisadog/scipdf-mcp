@@ -8,6 +8,11 @@ import {
   resolveToDoi,
   extractQueriesFromText,
 } from "./core/download.js";
+import { listPaperSources, searchPapers } from "./core/search.js";
+import { discoverRelatedPapers } from "./core/discovery.js";
+import { extractPaperText } from "./core/extract.js";
+import { auditReferences } from "./core/audit.js";
+import { listPdfSources } from "./core/pdfSources.js";
 import { checkMirror } from "./core/scihub.js";
 import { listPaperFiles } from "./core/storage.js";
 import { openPath } from "./core/open.js";
@@ -17,7 +22,11 @@ import {
   lookupUnpaywall,
   maskEmail,
 } from "./core/unpaywall.js";
-import type { QueryType, SciPdfConfig } from "./types.js";
+import type {
+  PaperSearchSource,
+  QueryType,
+  SciPdfConfig,
+} from "./types.js";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,11 +63,15 @@ function jsonResult(data: unknown) {
 }
 
 const queryTypeSchema = z
-  .enum(["auto", "doi", "url", "title", "citation"])
+  .enum(["auto", "doi", "arxiv", "url", "title", "citation"])
   .optional()
   .describe(
-    "How to interpret query: auto (default), doi, url, title, or citation",
+    "How to interpret query: auto (default), doi, arxiv, url, title, or citation",
   );
+
+const resolveQueryTypeSchema = z
+  .enum(["auto", "doi", "url", "title", "citation"])
+  .optional();
 
 export function createServer(): McpServer {
   const version = packageVersion();
@@ -68,13 +81,119 @@ export function createServer(): McpServer {
   });
 
   server.tool(
+    "search_papers",
+    "Search academic papers across Crossref, OpenAlex, Semantic Scholar, and arXiv. Results are normalized, deduplicated, and ranked with reciprocal rank fusion. Supports year, citation-count, and open-access filters.",
+    {
+      query: z.string().min(1).describe("Keywords, title, author, or topic"),
+      sources: z
+        .array(z.enum(["crossref", "openalex", "semanticscholar", "arxiv"]))
+        .min(1)
+        .optional()
+        .describe("Sources to query (default: all three)"),
+      limit: z.number().int().min(1).max(50).optional(),
+      year_from: z.number().int().min(1000).max(3000).optional(),
+      year_to: z.number().int().min(1000).max(3000).optional(),
+      min_citations: z.number().int().min(0).optional(),
+      open_access_only: z.boolean().optional(),
+    },
+    async ({
+      query,
+      sources,
+      limit,
+      year_from,
+      year_to,
+      min_citations,
+      open_access_only,
+    }) => {
+      refreshConfig();
+      if (
+        year_from !== undefined &&
+        year_to !== undefined &&
+        year_from > year_to
+      ) {
+        return jsonResult({
+          ok: false,
+          code: "INVALID_SEARCH_FILTER",
+          error: "year_from must be less than or equal to year_to",
+        });
+      }
+      const result = await searchPapers(query, config, {
+        sources: sources as PaperSearchSource[] | undefined,
+        limit,
+        yearFrom: year_from,
+        yearTo: year_to,
+        minCitations: min_citations,
+        openAccessOnly: open_access_only,
+      });
+      return jsonResult({ ok: true, ...result });
+    },
+  );
+
+  server.tool(
+    "list_search_sources",
+    "List academic search providers and their supported capabilities.",
+    {},
+    async () => jsonResult({ sources: listPaperSources() }),
+  );
+
+  server.tool(
+    "list_pdf_sources",
+    "List PDF source adapters, configuration state, access mode, legal status, and supported identifier kinds.",
+    {},
+    async () => {
+      refreshConfig();
+      return jsonResult({ sources: listPdfSources(config) });
+    },
+  );
+
+  for (const tool of [
+    {
+      name: "get_citations",
+      relation: "citations" as const,
+      description:
+        "Find papers that cite a DOI or Semantic Scholar paper ID.",
+    },
+    {
+      name: "get_references",
+      relation: "references" as const,
+      description:
+        "Find papers referenced by a DOI or Semantic Scholar paper ID.",
+    },
+    {
+      name: "find_related_papers",
+      relation: "related" as const,
+      description:
+        "Find papers similar to a DOI or Semantic Scholar paper ID.",
+    },
+  ]) {
+    server.tool(
+      tool.name,
+      `${tool.description} Uses Semantic Scholar and returns normalized paper records.`,
+      {
+        paper_id: z.string().min(1).describe("DOI or Semantic Scholar paper ID"),
+        limit: z.number().int().min(1).max(100).optional(),
+      },
+      async ({ paper_id, limit }) => {
+        refreshConfig();
+        const result = await discoverRelatedPapers(
+          paper_id,
+          tool.relation,
+          config,
+          limit,
+        );
+        return jsonResult({ ok: true, ...result });
+      },
+    );
+  }
+
+  server.tool(
     "download_paper",
-    "Download an academic paper PDF by DOI, title, URL, or citation. Default: Sci-Hub/pdfHosts. Optional OA-first when SCIPDF_PREFER_OA=true (Unpaywall if email set + OpenAlex/EuropePMC/Semantic Scholar). Returns path, source, citations, failure summary on error. Use force=true to re-download.",
+    "Download an academic paper PDF by DOI, arXiv ID/URL, title, publisher URL, or citation. arXiv IDs download directly from arXiv. DOI downloads use optional OA-first then the existing fallback chain. Returns path, source, citations, and structured failures.",
     {
 
       query: z
         .string()
-        .describe("DOI (10.xxxx/...), title, publisher URL, or citation string"),
+        .describe("DOI, arXiv ID/URL, title, publisher URL, or citation string"),
       query_type: queryTypeSchema,
       outdir: z.string().optional().describe("Override download directory"),
       filename: z.string().optional().describe("Override output filename"),
@@ -138,7 +257,7 @@ export function createServer(): McpServer {
     "Resolve title/URL/citation to DOI via Crossref + OpenAlex. Returns candidates when ambiguous (code AMBIGUOUS_DOI).",
     {
       query: z.string().describe("Title, URL, citation, or DOI"),
-      query_type: queryTypeSchema,
+      query_type: resolveQueryTypeSchema,
     },
     async ({ query, query_type }) => {
       refreshConfig();
@@ -160,6 +279,55 @@ export function createServer(): McpServer {
     async ({ text }) => {
       const queries = extractQueriesFromText(text);
       return jsonResult({ count: queries.length, queries });
+    },
+  );
+
+  server.tool(
+    "extract_paper_text",
+    "Extract text from a local downloaded PDF and save a sibling .txt file. The PDF must be inside the configured download directory.",
+    {
+      path: z.string().describe("Absolute path to a downloaded PDF"),
+      page_from: z.number().int().min(1).optional(),
+      page_to: z.number().int().min(1).optional(),
+      preview_chars: z.number().int().min(0).max(20_000).optional(),
+    },
+    async ({ path, page_from, page_to, preview_chars }) => {
+      refreshConfig();
+      if (
+        page_from !== undefined &&
+        page_to !== undefined &&
+        page_from > page_to
+      ) {
+        return jsonResult({
+          ok: false,
+          error: "page_from must be less than or equal to page_to",
+        });
+      }
+      return jsonResult(
+        await extractPaperText(path, config.downloadDir, {
+          pageFrom: page_from,
+          pageTo: page_to,
+          previewChars: preview_chars,
+        }),
+      );
+    },
+  );
+
+  server.tool(
+    "audit_references",
+    "Resolve and verify a BibTeX, RIS, or plain-text reference list. Returns DOI metadata, formatted citations, and ambiguous/not-found entries.",
+    {
+      text: z.string().min(1).describe("Bibliography or reference-list text"),
+      concurrency: z.number().int().min(1).max(8).optional(),
+    },
+    async ({ text, concurrency }) => {
+      refreshConfig();
+      const result = await auditReferences(
+        text,
+        Math.min(config.timeoutMs, 20_000),
+        concurrency ?? Math.min(config.concurrency, 4),
+      );
+      return jsonResult({ ok: true, ...result });
     },
   );
 

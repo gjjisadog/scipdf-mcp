@@ -20,6 +20,20 @@ describe("extractQueriesFromText", () => {
     const q = extractQueriesFromText(t);
     expect(q.some((x) => x.includes("10.1038"))).toBe(true);
   });
+
+  it("extracts arXiv eprints and URLs for batch download", () => {
+    const text = `@misc{x,
+  eprint = {2501.01234v2},
+  archivePrefix = {arXiv}
+}
+See also https://arxiv.org/abs/hep-th/9901001.`;
+    expect(extractQueriesFromText(text)).toEqual(
+      expect.arrayContaining([
+        "arXiv:2501.01234v2",
+        "arXiv:hep-th/9901001",
+      ]),
+    );
+  });
 });
 
 describe("looksLikeCitation", () => {

@@ -3,6 +3,8 @@
   "unpaywallEmail": "",
   "preferOa": false,
   "allowScihub": true,
+  "springerNaturePdfEndpoint": "",
+  "ieeeFulltextEndpoint": "",
   "scihubMirrors": [
     "https://sci-hub.ren/",
     "https://sci-hub.red/",

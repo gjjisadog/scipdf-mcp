@@ -1,9 +1,14 @@
-import type { ErrorCode, SourceFailureSummary } from "../types.js";
+import type {
+  ErrorCode,
+  PdfAttempt,
+  SourceFailureSummary,
+} from "../types.js";
 
 export class SciPdfError extends Error {
   code: ErrorCode;
   candidates?: Array<{ doi: string; title?: string; score?: number }>;
   failure?: SourceFailureSummary;
+  attempts?: PdfAttempt[];
 
   constructor(
     code: ErrorCode,
@@ -49,6 +54,7 @@ export function codeFromError(e: unknown): ErrorCode {
 
   const msg = e instanceof Error ? e.message : String(e);
   if (/Invalid DOI/i.test(msg)) return "INVALID_DOI";
+  if (/Invalid arXiv ID/i.test(msg)) return "INVALID_ARXIV_ID";
   if (/Empty query/i.test(msg)) return "EMPTY_QUERY";
   if (/No confident|No match|not found/i.test(msg)) return "DOI_NOT_FOUND";
   if (/Could not extract a DOI from URL/i.test(msg)) return "URL_NO_DOI";

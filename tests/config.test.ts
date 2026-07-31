@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
 
 describe("loadConfig concurrency", () => {
@@ -57,5 +57,25 @@ describe("loadConfig race / not-found", () => {
     const c = loadConfig();
     expect(c.sourceRaceWidth).toBe(8);
     expect(c.pdfNotFoundConfirmations).toBe(1);
+  });
+});
+
+describe("publisher endpoint configuration", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("loads non-secret endpoint templates from environment", () => {
+    vi.stubEnv(
+      "SCIPDF_SPRINGER_NATURE_PDF_ENDPOINT",
+      "https://publisher.example/springer/{doi}",
+    );
+    vi.stubEnv(
+      "SCIPDF_IEEE_FULLTEXT_ENDPOINT",
+      "https://publisher.example/ieee/{doi}",
+    );
+    const config = loadConfig();
+    expect(config.springerNaturePdfEndpoint).toContain("springer/{doi}");
+    expect(config.ieeeFulltextEndpoint).toContain("ieee/{doi}");
+    expect(config).not.toHaveProperty("elsevierApiKey");
+    expect(config).not.toHaveProperty("ieeeApiKey");
   });
 });

@@ -229,7 +229,7 @@ describe("safe public redirects", () => {
       {},
       1_000,
     );
-    expect(result.buffer).toEqual(fakePdf());
+    expect(Buffer.from(result.buffer)).toEqual(fakePdf());
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[1][0])).toBe(
       "https://public.example/paper.pdf",

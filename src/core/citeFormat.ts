@@ -97,3 +97,35 @@ export function buildCitations(work: {
     bibtex: formatBibtex({ ...work, doi: work.doi }),
   };
 }
+
+export function buildArxivCitations(work: {
+  arxivId: string;
+  title?: string;
+  authors?: string[];
+  year?: number;
+}) {
+  const authors = work.authors?.length
+    ? work.authors.length <= 2
+      ? work.authors.join(" & ")
+      : `${work.authors[0]} et al.`
+    : "Unknown";
+  const year = work.year ?? "n.d.";
+  const title = work.title ?? "Untitled";
+  const key = `arxiv${work.arxivId.replace(/[^A-Za-z0-9]/g, "")}`;
+  return {
+    apa: `${authors} (${year}). ${title}. arXiv:${work.arxivId}. https://arxiv.org/abs/${work.arxivId}`,
+    gbt: `${authors}. ${title}[EB/OL]. arXiv:${work.arxivId}, ${year}.`,
+    bibtex: [
+      `@misc{${key},`,
+      `  title = {${title}},`,
+      `  author = {${(work.authors ?? []).join(" and ") || "Unknown"}},`,
+      work.year != null ? `  year = {${work.year}},` : null,
+      `  eprint = {${work.arxivId}},`,
+      `  archivePrefix = {arXiv},`,
+      `  url = {https://arxiv.org/abs/${work.arxivId}}`,
+      `}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  };
+}

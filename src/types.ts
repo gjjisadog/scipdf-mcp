@@ -3,6 +3,7 @@ export type FilenameStyle = "doi" | "author_year_title";
 export type ErrorCode =
   | "EMPTY_QUERY"
   | "INVALID_DOI"
+  | "INVALID_ARXIV_ID"
   | "DOI_NOT_FOUND"
   | "AMBIGUOUS_DOI"
   | "URL_NO_DOI"
@@ -12,6 +13,57 @@ export type ErrorCode =
   | "INVALID_PDF"
   | "IO_ERROR"
   | "UNKNOWN";
+
+export type DownloadStatus =
+  | "downloaded"
+  | "cached"
+  | "invalid_request"
+  | "not_found"
+  | "not_entitled"
+  | "rate_limited"
+  | "blocked"
+  | "invalid_pdf"
+  | "all_sources_failed"
+  | "io_error"
+  | "unknown_error";
+
+export type PdfAttemptStatus =
+  | "success"
+  | "skipped"
+  | "not_found"
+  | "not_entitled"
+  | "rate_limited"
+  | "blocked"
+  | "timeout"
+  | "invalid_pdf"
+  | "request_failed";
+
+export interface OaEvidence {
+  provider: string;
+  hostType?: string;
+  version?: string;
+  license?: string;
+  pdfUrl?: string;
+}
+
+/** One auditable source probe. URLs are credential-redacted before exposure. */
+export interface PdfAttempt {
+  source: string;
+  status: PdfAttemptStatus;
+  legal: boolean;
+  accessMode:
+    | "open_access"
+    | "publisher_api"
+    | "repository"
+    | "legacy"
+    | "cache";
+  startedAt: string;
+  durationMs?: number;
+  url?: string;
+  httpStatus?: number;
+  reason?: string;
+  oaEvidence?: OaEvidence;
+}
 
 /** Compact multi-source failure breakdown for agents / CLI. */
 export interface SourceFailureSummary {
@@ -60,22 +112,52 @@ export interface SciPdfConfig {
    */
   unpaywallEmail?: string;
   /**
-   * Opt-in: try Unpaywall OA before Sci-Hub.
+   * Opt-in: try free OA providers (and Unpaywall when email is set) before Sci-Hub.
    * Default false — default path is Sci-Hub / pdfHosts.
    * Env: SCIPDF_PREFER_OA=true
    */
   preferOa: boolean;
   /** Allow Sci-Hub / pdfHosts (default true) */
   allowScihub: boolean;
+  /**
+   * Optional authorized PDF endpoint template for Springer Nature.
+   * Supports `{doi}`. API credentials are always read from env.
+   */
+  springerNaturePdfEndpoint?: string;
+  /**
+   * Optional authorized IEEE full-text endpoint template.
+   * Supports `{doi}`. API credentials are always read from env.
+   */
+  ieeeFulltextEndpoint?: string;
 }
 
-export type QueryType = "auto" | "doi" | "url" | "title" | "citation";
+export type QueryType =
+  | "auto"
+  | "doi"
+  | "arxiv"
+  | "url"
+  | "title"
+  | "citation";
+
+export type PaperIdentifier =
+  | { kind: "doi"; value: string }
+  | { kind: "arxiv"; value: string };
+
+export interface PaperIdentifiers {
+  doi?: string;
+  arxivId?: string;
+  semanticScholarId?: string;
+  openAlexId?: string;
+  sourceUrl?: string;
+}
 
 export interface DownloadResult {
   ok: boolean;
+  status?: DownloadStatus;
   index?: number;
   query: string;
   doi?: string;
+  arxivId?: string;
   title?: string;
   authors?: string[];
   year?: number;
@@ -86,6 +168,10 @@ export interface DownloadResult {
     | "openalex"
     | "europepmc"
     | "semanticscholar"
+    | "arxiv"
+    | "elsevier"
+    | "springer-nature"
+    | "ieee"
     | "cache";
   mirror?: string;
   /** OA license / version hint when source is an OA provider */
@@ -98,7 +184,11 @@ export interface DownloadResult {
   };
 
   bytes?: number;
+  /** SHA-256 of the saved or cached PDF, lowercase hexadecimal. */
+  sha256?: string;
   cached?: boolean;
+  /** Ordered source history for this download. */
+  attempts?: PdfAttempt[];
   code?: ErrorCode;
   error?: string;
   /** Structured multi-source failure stats (when download fails) */
@@ -154,4 +244,107 @@ export interface CrossrefWork {
   year?: number;
   container?: string;
   score?: number;
+  abstract?: string;
+  citationCount?: number;
+  isOpenAccess?: boolean;
+  pdfUrl?: string;
+  url?: string;
+  publicationType?: string;
+}
+
+export type PaperSearchSource =
+  | "crossref"
+  | "openalex"
+  | "semanticscholar"
+  | "arxiv";
+
+export interface PaperSearchResult {
+  title: string;
+  authors: string[];
+  year?: number;
+  doi?: string;
+  arxivId?: string;
+  identifiers?: PaperIdentifiers;
+  abstract?: string;
+  venue?: string;
+  citationCount?: number;
+  isOpenAccess?: boolean;
+  openAccessPdf?: string;
+  url?: string;
+  publicationType?: string;
+  /** Reciprocal-rank-fusion score across all contributing sources. */
+  relevanceScore: number;
+  /** Sources that contributed metadata for this deduplicated result. */
+  sources: PaperSearchSource[];
+}
+
+export interface SearchPapersOptions {
+  sources?: PaperSearchSource[];
+  limit?: number;
+  yearFrom?: number;
+  yearTo?: number;
+  minCitations?: number;
+  openAccessOnly?: boolean;
+  timeoutMs?: number;
+}
+
+export interface SearchPapersResult {
+  query: string;
+  total: number;
+  sources: PaperSearchSource[];
+  results: PaperSearchResult[];
+}
+
+export type PaperRelation = "citations" | "references" | "related";
+
+export interface PaperRelationResult {
+  paperId: string;
+  relation: PaperRelation;
+  total: number;
+  results: PaperSearchResult[];
+}
+
+export interface ExtractPaperTextResult {
+  ok: boolean;
+  path: string;
+  textPath?: string;
+  pages?: number;
+  totalPages?: number;
+  chars?: number;
+  preview?: string;
+  error?: string;
+}
+
+export type ReferenceAuditStatus =
+  | "verified"
+  | "resolved"
+  | "unverified"
+  | "ambiguous"
+  | "not_found";
+
+export interface ReferenceAuditEntry {
+  input: string;
+  status: ReferenceAuditStatus;
+  doi?: string;
+  title?: string;
+  authors?: string[];
+  year?: number;
+  container?: string;
+  source?: ResolveResult["source"];
+  code?: ErrorCode;
+  error?: string;
+  citation?: {
+    apa: string;
+    gbt: string;
+    bibtex: string;
+  };
+}
+
+export interface AuditReferencesResult {
+  total: number;
+  verified: number;
+  resolved: number;
+  unverified: number;
+  failed: number;
+  results: ReferenceAuditEntry[];
 }

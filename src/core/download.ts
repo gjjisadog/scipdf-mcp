@@ -5,6 +5,8 @@ import type {
   BatchDownloadResult,
   ResolveResult,
   SourceFailureSummary,
+  DownloadStatus,
+  PdfAttempt,
 } from "../types.js";
 import {
   extractDoiFromText,
@@ -24,16 +26,23 @@ import {
   extractQueriesFromText,
   looksLikeCitation,
 } from "./citations.js";
-import { buildCitations } from "./citeFormat.js";
-import { fetchPdfViaSciHub } from "./scihub.js";
-import { fetchPdfViaOa } from "./oa.js";
+import { buildArxivCitations, buildCitations } from "./citeFormat.js";
 import { SciPdfError, codeFromError } from "./errors.js";
 import { failureFromCaught } from "./failureSummary.js";
+import {
+  identifierStorageKey,
+  normalizeArxivId,
+} from "./identifiers.js";
+import { getArxivPaper } from "./arxiv.js";
+import { fetchPdfFromSources } from "./pdfSources.js";
 import {
   buildPdfPath,
   ensureDir,
   isCacheHitForDoi,
+  isCacheHitForIdentifier,
   savePdf,
+  sha256Bytes,
+  sha256File,
   writeManifest,
 } from "./storage.js";
 
@@ -49,9 +58,53 @@ export interface DownloadOptions {
 function inferType(q: string, queryType: QueryType = "auto"): QueryType {
   if (queryType !== "auto") return queryType;
   if (looksLikeDoi(q)) return "doi";
+  if (normalizeArxivId(q)) return "arxiv";
   if (looksLikeUrl(q)) return "url";
   if (looksLikeCitation(q)) return "citation";
   return "title";
+}
+
+function downloadStatusFromCode(code: DownloadResult["code"]): DownloadStatus {
+  if (
+    code === "EMPTY_QUERY" ||
+    code === "INVALID_DOI" ||
+    code === "INVALID_ARXIV_ID" ||
+    code === "URL_NO_DOI" ||
+    code === "DOI_NOT_FOUND" ||
+    code === "AMBIGUOUS_DOI"
+  ) {
+    return code === "DOI_NOT_FOUND" ? "not_found" : "invalid_request";
+  }
+  if (code === "PDF_NOT_IN_DB") return "not_found";
+  if (code === "MIRROR_BLOCKED") return "blocked";
+  if (code === "INVALID_PDF") return "invalid_pdf";
+  if (code === "ALL_SOURCES_FAILED") return "all_sources_failed";
+  if (code === "IO_ERROR") return "io_error";
+  return "unknown_error";
+}
+
+function downloadStatusFromAttempts(
+  attempts: PdfAttempt[] | undefined,
+): DownloadStatus | undefined {
+  const status = attempts?.at(-1)?.status;
+  if (status === "not_entitled") return "not_entitled";
+  if (status === "rate_limited") return "rate_limited";
+  if (status === "blocked") return "blocked";
+  if (status === "invalid_pdf") return "invalid_pdf";
+  if (status === "not_found") return "not_found";
+  return undefined;
+}
+
+function cacheAttempt(path: string): PdfAttempt {
+  return {
+    source: "cache",
+    status: "success",
+    legal: true,
+    accessMode: "cache",
+    startedAt: new Date().toISOString(),
+    durationMs: 0,
+    url: path,
+  };
 }
 
 export async function resolveToDoi(
@@ -225,12 +278,27 @@ export async function downloadPaper(
     const type = inferType(query, options.queryType ?? "auto");
     const timeoutMs = Math.min(config.timeoutMs, 20_000);
 
+    const arxivId = normalizeArxivId(query);
+    if (type === "arxiv" || (type === "url" && arxivId)) {
+      if (!arxivId) {
+        return {
+          ok: false,
+          status: "invalid_request",
+          query,
+          code: "INVALID_ARXIV_ID",
+          error: `Invalid arXiv ID: ${query}`,
+        };
+      }
+      return await downloadByArxiv(arxivId, query, options, config);
+    }
+
     // DOI fast-path: parallel meta + download when path only needs DOI
     if (type === "doi" || (type === "auto" && looksLikeDoi(query))) {
       const doi = normalizeDoi(query);
       if (!doi) {
         return {
           ok: false,
+          status: "invalid_request",
           query,
           code: "INVALID_DOI",
           error: `Invalid DOI: ${query}`,
@@ -248,6 +316,7 @@ export async function downloadPaper(
     if (!resolved.ok || !resolved.doi) {
       return {
         ok: false,
+        status: downloadStatusFromCode(resolved.code),
         query,
         code: resolved.code ?? "DOI_NOT_FOUND",
         error: resolved.error,
@@ -278,10 +347,15 @@ export async function downloadPaper(
       failureFromCaught(e);
     return {
       ok: false,
+      status:
+        downloadStatusFromAttempts(
+          e instanceof SciPdfError ? e.attempts : undefined,
+        ) ?? downloadStatusFromCode(code),
       query,
       code,
       error,
       failure,
+      attempts: e instanceof SciPdfError ? e.attempts : undefined,
       candidates: e instanceof SciPdfError ? e.candidates : undefined,
     };
   }
@@ -343,6 +417,7 @@ async function downloadByDoi(
         : undefined;
     return {
       ok: true,
+      status: "cached",
       query,
       doi,
       title: meta?.title,
@@ -350,64 +425,33 @@ async function downloadByDoi(
       year: meta?.year,
       path,
       source: "cache",
+      sha256: await sha256File(path),
       cached: true,
+      attempts: [cacheAttempt(path)],
       citation,
       candidates,
     };
   }
 
-  // preferOa: multi-source OA pipeline (Unpaywall + free OA APIs)
-  const tryOa = config.preferOa;
-
-  type PdfHit = {
-    pdfBytes: Uint8Array;
-    source: NonNullable<DownloadResult["source"]>;
-    mirror?: string;
-    oa?: DownloadResult["oa"];
-    titleHint?: string;
-  };
-
-  const fetchPdf = async (): Promise<PdfHit> => {
-    if (tryOa) {
-      const oa = await fetchPdfViaOa(doi, config);
-      if (oa) {
-        return {
-          pdfBytes: oa.pdfBytes,
-          source: oa.provider,
-          mirror: oa.pdfUrl,
-          titleHint: oa.meta?.title,
-          oa: {
-            provider: oa.provider,
-            hostType: oa.meta?.hostType,
-            version: oa.meta?.version,
-            license: oa.meta?.license,
-            pdfUrl: oa.pdfUrl,
-          },
-        };
-      }
-    }
-
-    if (config.allowScihub) {
-      const { pdfBytes, mirror } = await fetchPdfViaSciHub(doi, config);
-      return { pdfBytes, source: "scihub", mirror };
-    }
-
-    throw new SciPdfError(
-      "PDF_NOT_IN_DB",
-      tryOa
-        ? "No Open Access PDF found, and Sci-Hub is disabled (SCIPDF_ALLOW_SCIHUB=false)."
-        : "Sci-Hub is disabled and OA is not enabled. Default is Sci-Hub. Optional OA: set SCIPDF_PREFER_OA=true (Unpaywall also needs SCIPDF_UNPAYWALL_EMAIL).",
-    );
-  };
-
   // Parallel: finish metadata + PDF bytes (when meta not already required for path)
   const [metaDone, hit] = await Promise.all([
     meta ? Promise.resolve(meta) : metaPromise,
-    fetchPdf(),
+    fetchPdfFromSources({ kind: "doi", value: doi }, config),
   ]);
   meta = metaDone ?? meta;
 
-  const bytes = await savePdf(path, hit.pdfBytes, doi);
+  let bytes: number;
+  try {
+    bytes = await savePdf(path, hit.pdfBytes, doi);
+  } catch (error) {
+    const wrapped = new SciPdfError(
+      codeFromError(error),
+      error instanceof Error ? error.message : String(error),
+    );
+    wrapped.attempts = hit.attempts;
+    throw wrapped;
+  }
+  const sha256 = sha256Bytes(hit.pdfBytes);
   const citation =
     options.withCitation !== false
       ? buildCitations({
@@ -421,6 +465,7 @@ async function downloadByDoi(
 
   return {
     ok: true,
+    status: "downloaded",
     query,
     doi,
     title: meta?.title ?? hit.titleHint,
@@ -428,11 +473,93 @@ async function downloadByDoi(
     year: meta?.year,
     path,
     source: hit.source,
-    mirror: hit.mirror,
+    mirror: hit.url,
     bytes,
+    sha256,
     cached: false,
+    attempts: hit.attempts,
     citation,
     candidates,
+    oa: hit.oa,
+  };
+}
+
+async function downloadByArxiv(
+  arxivId: string,
+  query: string,
+  options: DownloadOptions,
+  config: SciPdfConfig,
+): Promise<DownloadResult> {
+  const meta = await getArxivPaper(arxivId, config);
+  const identifier = { kind: "arxiv" as const, value: arxivId };
+  const storageKey = identifierStorageKey(identifier);
+  const downloadDir = options.outdir ?? config.downloadDir;
+  await ensureDir(downloadDir);
+  const path = buildPdfPath(downloadDir, storageKey, {
+    filename: options.filename,
+    style: config.filenameStyle,
+    title: meta?.title,
+    authors: meta?.authors,
+    year: meta?.year,
+  });
+  const citation =
+    options.withCitation !== false
+      ? buildArxivCitations({
+          arxivId,
+          title: meta?.title,
+          authors: meta?.authors,
+          year: meta?.year,
+        })
+      : undefined;
+  if (!options.force && (await isCacheHitForIdentifier(path, storageKey))) {
+    return {
+      ok: true,
+      status: "cached",
+      query,
+      doi: meta?.doi,
+      arxivId,
+      title: meta?.title,
+      authors: meta?.authors,
+      year: meta?.year,
+      path,
+      source: "cache",
+      sha256: await sha256File(path),
+      cached: true,
+      attempts: [cacheAttempt(path)],
+      citation,
+    };
+  }
+
+  const hit = await fetchPdfFromSources(identifier, config);
+  let bytes: number;
+  try {
+    bytes = await savePdf(path, hit.pdfBytes, storageKey);
+  } catch (error) {
+    const wrapped = new SciPdfError(
+      codeFromError(error),
+      error instanceof Error ? error.message : String(error),
+    );
+    wrapped.attempts = hit.attempts;
+    throw wrapped;
+  }
+  const sha256 = sha256Bytes(hit.pdfBytes);
+  return {
+    ok: true,
+    status: "downloaded",
+    query,
+    doi: meta?.doi,
+    arxivId,
+    title: meta?.title ?? hit.titleHint,
+    authors: meta?.authors,
+    year: meta?.year,
+    path,
+    source: hit.source,
+    mirror: hit.url,
+    bytes,
+    sha256,
+    cached: false,
+    attempts: hit.attempts,
+    citation,
     oa: hit.oa,
   };
 }
@@ -463,7 +590,10 @@ function dedupeQueries(queries: string[]): { list: string[]; deduped: number } {
   const list: string[] = [];
   let deduped = 0;
   for (const q of queries) {
-    const key = normalizeDoi(q)?.toLowerCase() ?? q.trim().toLowerCase();
+    const key =
+      normalizeDoi(q)?.toLowerCase() ??
+      normalizeArxivId(q)?.toLowerCase() ??
+      q.trim().toLowerCase();
     if (!key) continue;
     if (seen.has(key)) {
       deduped++;

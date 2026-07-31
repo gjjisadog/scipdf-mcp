@@ -1,7 +1,7 @@
 {
   "name": "scipdf-mcp",
   "version": "0.3.0",
-  "description": "MCP server + skill + CLI: OA via Unpaywall then Sci-Hub PDF download by DOI/title",
+  "description": "MCP server + skill + CLI for multi-source academic search and PDF download by DOI/title",
   "type": "module",
   "bin": {
     "scipdf-mcp": "./dist/index.js"
@@ -52,7 +52,9 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "cheerio": "^1.0.0",
+    "cheerio": "1.0.0",
+    "css-what": "6.1.0",
+    "pdfjs-dist": "^6.2.108",
     "zod": "^3.24.2"
   },
   "devDependencies": {

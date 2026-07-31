@@ -19,14 +19,14 @@ Requirements: **Node.js ≥ 20**.
 ## What install does
 
 1. `npm install` + `npm run build`
-2. Skill → `~/.grok/skills/scipdf` (+ Claude / agents)
-3. MCP `scipdf` → Grok / Claude Desktop / Cursor
+2. Skill → `~/.grok/skills/scipdf` (+ `~/.codex` / Claude / agents)
+3. MCP `scipdf` → Grok + Codex (`config.toml`) / Claude Desktop / Cursor
 4. Self-test: `node dist/index.js version` (+ soft resolve check)
 5. Download dir default `~/Documents/Papers`
 
 ## After install
 
-1. Restart the AI client.
+1. Restart Grok / Codex / other AI clients.
 2. `/scipdf` or ask to download by title/DOI.
 3. CLI fallback: `node dist/index.js download 10.xxxx/yyyy`
 

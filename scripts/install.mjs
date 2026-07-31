@@ -12,6 +12,7 @@
  */
 import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -97,21 +98,27 @@ function build() {
 }
 
 function installSkill() {
-  const src = join(ROOT, "skills", "scipdf", "SKILL.md");
-  if (!existsSync(src)) {
+  const src = join(ROOT, "skills", "scipdf");
+  if (!existsSync(join(src, "SKILL.md"))) {
     warn("skills/scipdf/SKILL.md not found, skip skill install");
     return;
   }
 
   const targets = [
-    join(HOME, ".grok", "skills", "scipdf", "SKILL.md"),
-    join(HOME, ".claude", "skills", "scipdf", "SKILL.md"),
-    join(HOME, ".agents", "skills", "scipdf", "SKILL.md"),
+    join(HOME, ".grok", "skills", "scipdf"),
+    join(HOME, ".claude", "skills", "scipdf"),
+    join(HOME, ".agents", "skills", "scipdf"),
+    // Codex CLI / app skills root
+    join(HOME, ".codex", "skills", "scipdf"),
   ];
+
+  // Project-local Grok skill (this repo) so /scipdf works in-workspace
+  const projectSkill = join(ROOT, ".grok", "skills", "scipdf");
+  targets.push(projectSkill);
 
   for (const dest of targets) {
     mkdirSync(dirname(dest), { recursive: true });
-    copyFileSync(src, dest);
+    cpSync(src, dest, { recursive: true, force: true });
     ok(`Skill installed → ${dest}`);
   }
 }
@@ -226,15 +233,12 @@ function stripScipdfTomlSections(text) {
   return out.replace(/\n{3,}/g, "\n\n").trimEnd();
 }
 
-function registerGrokToml(entry) {
-  const configPath = join(HOME, ".grok", "config.toml");
-  mkdirSync(dirname(configPath), { recursive: true });
-
+function scipdfTomlSection(entry) {
   const envToml = UNPAYWALL_EMAIL
     ? `env = { SCIPDF_DOWNLOAD_DIR = ${JSON.stringify(DOWNLOAD_DIR)}, SCIPDF_UNPAYWALL_EMAIL = ${JSON.stringify(UNPAYWALL_EMAIL)} }`
     : `env = { SCIPDF_DOWNLOAD_DIR = ${JSON.stringify(DOWNLOAD_DIR)} }`;
 
-  const section = `
+  return `
 # --- scipdf-mcp (auto-installed) ---
 [mcp_servers.scipdf]
 command = ${JSON.stringify(nodeCommand())}
@@ -244,14 +248,26 @@ startup_timeout_sec = 30
 tool_timeout_sec = 120
 ${envToml}
 `;
+}
 
+function registerTomlMcp(configPath, entry, label) {
+  mkdirSync(dirname(configPath), { recursive: true });
   let text = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
   text = stripScipdfTomlSections(text);
   writeFileSync(
     configPath,
-    (text ? text + "\n" : "") + section.trim() + "\n",
+    (text ? text + "\n" : "") + scipdfTomlSection(entry).trim() + "\n",
   );
-  ok(`Registered Grok MCP in ${configPath}`);
+  ok(`Registered ${label} MCP in ${configPath}`);
+}
+
+function registerGrokToml(entry) {
+  registerTomlMcp(join(HOME, ".grok", "config.toml"), entry, "Grok");
+}
+
+/** Codex CLI / ChatGPT desktop — same mcp_servers.* TOML shape as Grok. */
+function registerCodexToml(entry) {
+  registerTomlMcp(join(HOME, ".codex", "config.toml"), entry, "Codex");
 }
 
 function tryGrokCli(entry) {
@@ -311,12 +327,12 @@ function printSummary(entry) {
   Entry:     ${entry}
   Papers:    ${DOWNLOAD_DIR}
   Unpaywall: ${UNPAYWALL_EMAIL ? "email set (still Sci-Hub default; OA needs SCIPDF_PREFER_OA=true)" : "optional — default is Sci-Hub only"}
-  Skill:     ~/.grok/skills/scipdf  (also ~/.claude / ~/.agents)
-  MCP name:  scipdf
+  Skill:     ~/.grok/skills/scipdf  (+ ~/.codex / ~/.claude / ~/.agents)
+  MCP name:  scipdf  (Grok + Codex config.toml, Claude/Cursor JSON)
   CLI:       node ${entry} download <doi|title>
 
 \x1b[1mNext steps\x1b[0m
-  1. Restart Grok / Claude / Cursor so MCP reloads
+  1. Restart Grok / Codex / Claude / Cursor so MCP reloads
   2. In chat:  /scipdf  download paper: <title or DOI>
   3. CLI:      node dist/index.js download 10.xxxx/yyyy
 
@@ -337,6 +353,7 @@ function main() {
   installSkill();
   tryGrokCli(entry);
   registerGrokToml(entry);
+  registerCodexToml(entry);
   registerClaudeAndCursor(entry);
   selfTest(entry);
   printSummary(entry);

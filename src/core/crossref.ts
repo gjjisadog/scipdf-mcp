@@ -10,7 +10,25 @@ interface CrossrefMessage {
   author?: Array<{ given?: string; family?: string }>;
   published?: { "date-parts"?: number[][] };
   "container-title"?: string[];
+  abstract?: string;
+  "is-referenced-by-count"?: number;
+  URL?: string;
+  type?: string;
   score?: number;
+}
+
+function plainText(value?: string): string | undefined {
+  if (!value) return undefined;
+  const text = value
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || undefined;
 }
 
 function mapWork(item: CrossrefMessage): CrossrefWork | null {
@@ -30,6 +48,10 @@ function mapWork(item: CrossrefMessage): CrossrefWork | null {
     year,
     container: item["container-title"]?.[0],
     score: item.score,
+    abstract: plainText(item.abstract),
+    citationCount: item["is-referenced-by-count"],
+    url: item.URL,
+    publicationType: item.type,
   };
 }
 
@@ -64,7 +86,8 @@ export async function searchByTitle(
   const params = new URLSearchParams({
     query: title,
     rows: String(rows),
-    select: "DOI,title,author,published,container-title,score",
+    select:
+      "DOI,title,author,published,container-title,abstract,is-referenced-by-count,URL,type,score",
   });
   const url = `${CROSSREF_BASE}/works?${params}`;
   try {

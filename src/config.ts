@@ -128,7 +128,8 @@ export function loadConfig(): SciPdfConfig {
     ""
   ).trim() || undefined;
 
-  // OA is opt-in: only when email is set AND preferOa is true (default false → Sci-Hub first)
+  // OA-first is opt-in. Free providers need no email; Unpaywall additionally
+  // requires a configured email (default false → Sci-Hub/pdfHosts first).
   const preferOaEnv = process.env.SCIPDF_PREFER_OA;
   const preferOa =
     preferOaEnv != null
@@ -140,6 +141,17 @@ export function loadConfig(): SciPdfConfig {
     allowScihubEnv != null
       ? allowScihubEnv !== "0" && allowScihubEnv.toLowerCase() !== "false"
       : file.allowScihub !== false;
+
+  const springerNaturePdfEndpoint = (
+    process.env.SCIPDF_SPRINGER_NATURE_PDF_ENDPOINT ??
+    (file.springerNaturePdfEndpoint as string | undefined) ??
+    ""
+  ).trim() || undefined;
+  const ieeeFulltextEndpoint = (
+    process.env.SCIPDF_IEEE_FULLTEXT_ENDPOINT ??
+    (file.ieeeFulltextEndpoint as string | undefined) ??
+    ""
+  ).trim() || undefined;
 
   return {
     downloadDir,
@@ -185,6 +197,8 @@ export function loadConfig(): SciPdfConfig {
     unpaywallEmail,
     preferOa,
     allowScihub,
+    springerNaturePdfEndpoint,
+    ieeeFulltextEndpoint,
   };
 }
 

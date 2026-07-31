@@ -1,4 +1,5 @@
 import { extractDoiFromText, normalizeDoi } from "./doi.js";
+import { normalizeArxivId } from "./identifiers.js";
 
 /** Extract DOIs and loose queries from bib / ris / pasted reference lists */
 export function extractQueriesFromText(text: string): string[] {
@@ -22,6 +23,18 @@ export function extractQueriesFromText(text: string): string[] {
   for (const m of text.matchAll(/^DO\s+-\s+(.+)$/gim)) {
     const d = normalizeDoi(m[1]);
     if (d) add(d);
+  }
+
+  // BibTeX arXiv eprint fields and common textual arXiv identifiers.
+  for (const m of text.matchAll(/eprint\s*=\s*[{"]([^}"\n]+)[}"]/gi)) {
+    const id = normalizeArxivId(m[1]);
+    if (id) add(`arXiv:${id}`);
+  }
+  for (const m of text.matchAll(
+    /(?:arxiv:\s*|https?:\/\/(?:export\.)?arxiv\.org\/(?:abs|pdf)\/)([a-z0-9.-]+\/\d{7}(?:v\d+)?|\d{4}\.\d{4,5}(?:v\d+)?)(?:\.pdf)?/gi,
+  )) {
+    const id = normalizeArxivId(m[1]);
+    if (id) add(`arXiv:${id}`);
   }
 
   // All bare DOIs in text (allow <> in SICI)
